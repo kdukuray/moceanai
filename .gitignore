@@ -1,0 +1,14 @@
+# Mac OS Files
+.DS_Store
+.idea
+
+# Media Files
+animated_videos/*
+base_images/*
+final_videos/*
+video_with_audio_clips/*
+voice_over_audios/*
+
+# Env files
+.env
+.venv

@@ -1,0 +1,22 @@
+if error occurs anywhere:
+    Video Data
+    Show all Clips
+    Option to filter valid clips from not valid clips
+    for all clips(especially invalid), the option exists to:
+        see all of its data
+        re do the base image generation
+        modify voice script
+        re do the voice over generation
+        re do the merge audio and visuals
+
+    For video itself, we can recall:
+        # re dos
+        generate_base_images
+        generate_voice_overs
+
+
+        # new functionality
+        merge only valid ones we have so far
+
+
+WE need a button that will populate the ui with default values
