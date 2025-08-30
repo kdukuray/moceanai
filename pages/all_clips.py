@@ -40,19 +40,29 @@ else:
 
         with col2:
             st.subheader("Actions")
-            if st.button("ReGenerate Base Image", key=uuid4().hex):
+            if st.button("ReGenerate Base Image", key=f"regen_base_clip_{clip.clip_id}"):
+                print("st base image pressed")
                 with st.spinner(f"Regenerating Base Image for clip {clip.clip_id}..."):
                     st.session_state.video.re_do_clip_action(clip_id=clip.clip_id, action="base_image")
-                print("st base image ran")
+                    st.rerun()
 
-            if st.button("Regenerate Audio", key=uuid4().hex):
+            if st.button("Animate Clip Video", key=f"regen_animate_clip_{clip.clip_id}"):
+                print("st animate image pressed")
+                with st.spinner(f"Animating visuals for clip {clip.clip_id}..."):
+                    st.session_state.video.re_do_clip_action(clip_id=clip.clip_id, action="animate_base")
+                    st.rerun()
+
+            if st.button("Regenerate Audio", key=f"regen_audio_clip_{clip.clip_id}"):
+                print("st base image pressed")
                 with st.spinner(f"Regenerating Audio for clip {clip.clip_id}..."):
                     st.session_state.video.re_do_clip_action(clip_id=clip.clip_id, action="audio")
-                print("st audio ran")
-            if st.button("Merge Audio and Visuals", key=uuid4().hex):
-                with st.spinner(f"Regenerating(merging) Animated Video for clip {clip.clip_id}..."):
-                    st.session_state.video.re_do_clip_action(clip_id=clip.clip_id, action="animate")
-                print("st animated video ran")
+                    st.rerun()
+
+            if st.button("Merge Audio and Visuals", key=f"regen_merge_clip_{clip.clip_id}"):
+                print("st merge audio and video pressed")
+                with st.spinner(f"Merging Audio and Visuals for clip {clip.clip_id}..."):
+                    st.session_state.video.re_do_clip_action(clip_id=clip.clip_id, action="merge")
+                    st.rerun()
 
 
         col1, col2 = st.columns(2)

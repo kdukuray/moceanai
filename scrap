@@ -20,3 +20,276 @@ if error occurs anywhere:
 
 
 WE need a button that will populate the ui with default values
+
+
+
+------------
+Add ability to define to give auxillary requests to the generation of images and the overall visuals aspects of the image generation pipeline
+
+
+
+
+Barrier
+------------------------------------------------------------------------------------------------------------------------
+# to do
+- add logic that prevents you from calling multi shots functions from one shot context and vice versa
+
+- decide if "voice presence" should make a comeback.
+- add should animate to the videos, clips and incorporate veo 3
+- image style
+- more checks at the beginning of funstions to throw error when what they need is not available
+
+
+
+
+--------
+phony scripts:
+    # def generate_clip_data(self, topic: str) -> list[dict[str, Any]]:
+    #     payload = {
+    #         "talking_point": topic,
+    #         "cumulative_script": self.cumulative_script,
+    #         "meta": {
+    #             "topic": self.topic,
+    #             "purpose": self.purpose.value,
+    #             "target_audience": self.target_audience,
+    #             "tone": self.tone.value,
+    #             "auxiliary_requests": self.auxiliary_requests,
+    #             "platform": self.platform.value,
+    #             "length": self.duration_seconds,
+    #             "style_reference": self.style_reference,
+    #         }
+    #     }
+    #
+    #     system_prompt = {"role": "system", "content": clip_builder_system_prompt}
+    #     user_input = {"role": "user", "content": json.dumps(payload)}
+    #     messages = [system_prompt, user_input]
+    #
+    #     try:
+    #         ai_response = openai_client.chat.completions.create(
+    #             model="gpt-5",
+    #             messages=messages,
+    #         )
+    #         clip_data_with_fence: str = ai_response.choices[0].message.content
+    #         clip_data: list[dict[str, Any]] = json.loads(extract_json_from_fence(clip_data_with_fence))
+    #         return clip_data
+    #     except Exception as e:
+    #         raise Exception(f"Generation of clip data failed with exception: {e}")
+
+
+    ###### DONT DELETE
+    # def generate_clips_(self):
+    #     if not self.script_list_one_shot:
+    #         raise Exception("Clips cannot be generated if script is not generated.")
+    #     # Shouldnt have a s at descriptions, this function is basically obsolete, just adding it to please python
+    #     # system_prompt = {"role": "system", "content": base_image_descriptions_generator_system_prompt}
+    #     for clip_voice_script_index, clip_voice_script in enumerate(self.script_list_one_shot):
+    #         previous_clip_voice_script_index = clip_voice_script_index - 1
+    #         next_clip_voice_script_index = clip_voice_script_index + 1
+    #         self.clip_count += 1
+    #         new_clip = Clip(
+    #             clip_id=self.clip_count,
+    #             # modify this
+    #             clip_duration_sec=4,
+    #             tone=self.tone,
+    #             # modify this
+    #             voice_presence="voice_over",
+    #             previous_clip_voice_script=self.script_list_one_shot[previous_clip_voice_script_index] if (previous_clip_voice_script_index > 0) else None,
+    #             voice_script=clip_voice_script,
+    #             next_clip_voice_script=self.script_list_one_shot[next_clip_voice_script_index] if next_clip_voice_script_index < (len(self.script_list_one_shot) - 1) else None,
+    #             aspect_ratio=self.aspect_ratio,
+    #             mental_model=self.mental_model,
+    #             image_model=self.image_model,
+    #             image_style=self.image_style,
+    #             voice_model=self.voice_model,
+    #             voice_actor=self.voice_actor
+    #         )
+    #         self.clips.append(new_clip)
+
+
+
+    # def generate_clips(self):
+    #     if not self.generated_topics:
+    #         raise Exception("Generation of topics for the video clip data failed.")
+    #     # For each topic, generate the clip data, and create a clip
+    #     for topic in self.generated_topics:
+    #         clips_data_per_topic: list = self.generate_clip_data(topic.get("topic", ""))
+    #         for clip_data in clips_data_per_topic:
+    #             # creating the clip
+    #             self.clip_count += 1
+    #             new_clip = Clip(
+    #                 clip_id=self.clip_count,
+    #                 base_image_description=clip_data.get("base_image_description", ""),
+    #                 clip_duration_sec=int(clip_data.get("clip_duration_sec", "")),
+    #                 tone=self.tone,
+    #                 voice_presence=clip_data.get("voice_presence", ""),
+    #                 voice_script=clip_data.get("voice_script", "empty my boy"),
+    #                 aspect_ratio=self.aspect_ratio,
+    #                 image_model=self.image_model,
+    #                 voice_model=self.voice_model,
+    #                 voice_actor=self.voice_actor,
+    #             )
+    #             # add clip to the videos clips and update the cumulative script
+    #             self.clips.append(new_clip)
+    #             self.cumulative_script += new_clip.voice_script
+
+
+
+
+
+
+    #
+    #
+    # @staticmethod
+    # async def _generate_clips_audios(clip):
+    #     async with elevenlabs_semaphore:
+    #         await asyncio.to_thread(clip.generate_voice_over)
+    #
+    #
+    # async def generate_clips_audios(self):
+    #     if not self.clips:
+    #         raise Exception("Clip audios cannot be generated without clips.")
+    #     async with asyncio.TaskGroup() as tg:
+    #         for clip in self.clips:
+    #             tg.create_task(self._generate_clips_audios(clip))
+    #
+    #
+    # def animate_clips_visuals(self):
+    #     if not self.clips:
+    #         raise Exception("Clip visuals cannot be animated without clips.")
+    #     for clip in self.clips:
+    #         clip.animate_video()
+    #
+    #
+    # def merge_clips_audios_and_visuals(self):
+    #     if not self.clips:
+    #         raise Exception("Clips audios and visuals cannot be merged without clips.")
+    #     for clip in self.clips:
+    #         clip.merge_audio_and_visual()
+    #
+    #
+    # def validate_clips(self):
+    #     # for a clip to be valid, it must have an animated video path
+    #     if not self.clips:
+    #         raise Exception("Clip cannot be validated without clips.")
+    #     all_clips_valid = True
+    #     for clip in self.clips:
+    #         if not clip.animated_video_path:
+    #             all_clips_valid = False
+    #             break
+    #     self.all_clips_valid = all_clips_valid
+    #
+    #
+    # def merge_all_clips(self):
+    #     if not self.all_clips_valid:
+    #         raise Exception("Some clips are not valid and therefore clips cannot be merged.")
+    #
+    #
+    #     video_clips = [mvpy.VideoFileClip(clip.animated_video_path) for clip in self.clips]
+    #     time_of_creation = datetime.now().strftime("%Y%m%d%H%M%S")
+    #     final_video = mvpy.concatenate_videoclips(video_clips, method="compose")
+    #     final_video_path = os.path.join("final_videos", f"{time_of_creation}.mp4")
+    #     final_video.write_videofile(final_video_path, fps=24, audio=True,
+    #                                codec='libx264',
+    #                                audio_codec='aac',
+    #                                )
+    #     self.final_video_path = final_video_path
+    #
+    #
+    # def get_final_video_path(self):
+    #     if not self.final_video_path:
+    #         raise Exception("Final video path cannot be retrieved.")
+    #     return self.final_video_path
+
+
+
+
+    # async def generate_clip_base_image_descriptions_multi_shot_audio(self):
+    #     """
+    #     This function loops through all the clips and invokes their 'generate_clip_base_image_descriptions' which generates the base image descriptions for each clip.
+    #     Returns:
+    #          None
+    #     """
+    #     if not self.clips:
+    #         raise Exception("Generation of base image descriptions for the video clip data failed because no clips exist.")
+    #     full_script = "".join(self.script_list)
+    #     async with asyncio.TaskGroup() as tg:
+    #         for clip in self.clips:
+    #             # Add auxiliary image requests later
+    #             tg.create_task(clip.generate_base_image_description_multi_shot_audio(full_script=full_script,
+    #                                                                                  auxiliary_image_requests=self.auxiliary_image_requests))
+
+
+    # async def generate_clip_base_image_descriptions_one_shot_audio(self):
+    #     if not self.clips:
+    #        raise Exception("Generation of base image descriptions for the video clip data failed because no clips exist.")
+    #     full_script = "".join(self.script_list)
+    #     async with asyncio.TaskGroup() as tg:
+    #         for clip in self.clips:
+    #             # Add auxiliary image requests later
+    #             tg.create_task(clip.generate_base_image_description_one_shot_audio(full_enhanced_script=full_script,
+    #                                                                                  auxiliary_image_requests=self.auxiliary_image_requests))
+
+
+
+    #
+    # async def generate_video_(self):
+    #     print("Generating topics...")
+    #     self.generate_talking_points()
+    #     print("Finished generating topics.")
+    #     print("-"*25)
+    #
+    #     #------- experiment (script is created uniformly-------
+    #     print("Generating script...")
+    #     self.generate_script()
+    #     print("Finished generating script.")
+    #     print("-"*25)
+    #
+    #     # print("Generating clips...")
+    #     # self.generate_clips()
+    #     # print("Finished generating clips.")
+    #     # print("-" * 25)
+    #
+    #
+    #     print("Generating clips...")
+    #     self.generate_clips_()
+    #     print("Finished generating clips.")
+    #     print("-"*25)
+    #     #------- end experiment -------
+    #
+    #     print("Generating audio clips.")
+    #     await self.generate_clips_audios()
+    #     print("Finished generating audio clips.")
+    #
+    #     # experiment 2, clips descriptions are generated on clip objects instead of during initialization
+    #     print("Generating base Image Descriptions...")
+    #     await self.generate_clip_base_image_descriptions_multi_shot_audio()
+    #     print("Finished generating base Image Descriptions.")
+    #     print("-"*25)
+    #     # end experiment 2
+    #
+    #
+    #     print("Generating clip visuals.")
+    #     await self.generate_clips_visuals()
+    #     print("Finished generating clip visuals.")
+    #     print("-" * 25)
+    #
+    #     print("-" * 25)
+    #     print("Animating clip Visuals.")
+    #     self.animate_clips_visuals()
+    #     print("Finished animating clip Visuals.")
+    #     print("-" * 25)
+    #     print("Merging clip audio and visuals")
+    #     self.merge_clips_audios_and_visuals()
+    #     print("Finished merging clip audio and visuals.")
+    #     print("-" * 25)
+    #     print("Validating clips.")
+    #     self.validate_clips()
+    #     print("Finished validating clips.")
+    #     print("-" * 25)
+    #     print("Merging all clips.")
+    #     self.merge_all_clips()
+    #     print("Finished merging all clips.")
+    #     print("-" * 25)
+    #     print(f"Final Video path {self.get_final_video_path()}")
+    #
+    #

@@ -7,3 +7,12 @@ class ImageModel(Enum):
 
 class VoiceModel(Enum):
     ELEVENLABS = "ElevenLabs"
+
+
+class ModelProvider(Enum):
+    OPENAI = "OpenAI"
+    GEMINI = "Gemini"
+    ANTHROPIC = "Anthropic"
+    DEEPSEEK = "Deepseek"
+    META = "Meta"
+    XAI = "XAI"

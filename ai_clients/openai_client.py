@@ -5,4 +5,4 @@ import asyncio
 
 load_dotenv()
 openai_client = openai.OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-openai_semaphore = asyncio.Semaphore(5)
+openai_semaphore = asyncio.Semaphore(2)

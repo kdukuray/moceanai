@@ -1,6 +1,7 @@
 # Mac OS Files
 .DS_Store
 .idea
+__pycache__
 
 # Media Files
 animated_videos/*
@@ -12,3 +13,5 @@ voice_over_audios/*
 # Env files
 .env
 .venv
+sandbox_for_testing
+sandbox_for_testing/*

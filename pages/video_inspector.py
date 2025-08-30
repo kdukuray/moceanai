@@ -1,6 +1,6 @@
 import streamlit as st
 import asyncio
-from video import Video
+from shortformvideo import ShortFormVideo
 
 st.title("🎬 Video Info")
 st.divider()
@@ -16,12 +16,12 @@ else:
 
     # Section 1: Core Metadata
     st.subheader("📌 Core Metadata")
-    st.text(f"Central Theme: {st.session_state.video.central_theme}")
+    st.text(f"Central Theme: {st.session_state.video.topic}")
     st.text(f"Purpose: {st.session_state.video.purpose.value}")
     st.text(f"Target Audience: {st.session_state.video.target_audience}")
     st.text(f"Tone: {st.session_state.video.tone.value}")
     st.text(f"Platform: {st.session_state.video.platform.value}")
-    st.text(f"Length: {st.session_state.video.length} seconds")
+    st.text(f"Length: {st.session_state.video.duration_seconds} seconds")
     st.text(f"Aspect Ratio: {st.session_state.video.aspect_ratio.value}")
     st.text(f"Image Model: {st.session_state.video.image_model.value}")
     st.text(f"Voice Model: {st.session_state.video.voice_model.value}")
@@ -54,7 +54,7 @@ else:
 
     if st.button("1️⃣ Generate Topics"):
         try:
-            st.session_state.video.generate_topics()
+            st.session_state.video.generate_talking_points()
             st.success("Topics generated.")
             st.rerun()
         except Exception as e:
