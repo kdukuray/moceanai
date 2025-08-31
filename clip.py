@@ -97,7 +97,7 @@ class Clip:
             model="gpt-image-1",
             prompt=f"{base_image_description}",
             output_format="png",
-            quality="low",
+            quality="medium",
             size="1536x1024" if self.aspect_ratio == AspectRatio.LANDSCAPE else "1024x1536",
         )
 
