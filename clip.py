@@ -256,19 +256,27 @@ class Clip:
         # this can be used to derive the sub clip count and the `last_sub_clip_duration`
         if not self.duration_seconds:
             raise Exception(f"duration_seconds cannot be None")
-
-        sub_clip_count = self.duration_seconds // self.desired_sub_clip_duration_seconds
+        # if the desired duration > duration in seconds, then we should still have one clip, not zero
+        # hence the conditional statement
+        sub_clip_count = self.duration_seconds // self.desired_sub_clip_duration_seconds \
+            if self.duration_seconds // self.desired_sub_clip_duration_seconds != 0 \
+            else 1
         sub_clips_time_remainder = self.duration_seconds % self.desired_sub_clip_duration_seconds
         # if the time remainder after all subclips (of duration `desired_sub_clip_duration_seconds`)
         # is greater than the duration of `compromised_sub_clip_duration_seconds`, make a new sub clip
         # with duration `compromised_sub_clip_duration_seconds`
         if sub_clips_time_remainder > self.compromised_sub_clip_duration_seconds:
             self.last_sub_clip_duration = sub_clips_time_remainder
-            self.sub_clip_count = sub_clip_count + 1
+            # if duration // desired_duration is equal to 0, there shouldn't be an extra clip as there wasn't even enough
+            # time for one clip, hence the following conditional
+            self.sub_clip_count = sub_clip_count + 1 if self.duration_seconds // self.desired_sub_clip_duration_seconds != 0 else sub_clip_count
         # if not, add the remaining time to the last sub clip
         else:
-            self.last_sub_clip_duration = self.desired_sub_clip_duration_seconds + sub_clips_time_remainder
+            self.last_sub_clip_duration = self.desired_sub_clip_duration_seconds + sub_clips_time_remainder \
+            if self.duration_seconds // self.desired_sub_clip_duration_seconds != 0 else \
+            sub_clips_time_remainder
             self.sub_clip_count = sub_clip_count
+
 
         # for debugging purposes
         print(f"Clip {self.clip_id} should have {self.sub_clip_count} subclips")

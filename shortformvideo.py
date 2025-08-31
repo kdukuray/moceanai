@@ -609,13 +609,13 @@ class ShortFormVideo:
             # assign actual times to the clip
             clip.voice_over_start_time = self.one_shot_audio_voice_over_start_times_seconds[start_time_index]
             clip.voice_over_end_time = self.one_shot_audio_voice_over_start_times_seconds[end_time_index]
-            clip.duration_seconds = clip.voice_over_end_time - clip.voice_over_start_time
-            # this is meant to accommodate the inter clip gaps. basically adding to each clip, the the difference in duration after it ends and before the
+            # this is meant to accommodate the inter clip gaps. basically adding to each clip, the difference in duration after it ends and before the
             # next clips start as far as there is a next clip.
             clip.voice_over_end_time += (self.one_shot_audio_voice_over_start_times_seconds[end_time_index+1] -
                                          self.one_shot_audio_voice_over_start_times_seconds[end_time_index]) \
                 if end_time_index+1 < len(self.one_shot_audio_voice_over_start_times_seconds) \
                 else 0
+            clip.duration_seconds = clip.voice_over_end_time - clip.voice_over_start_time
 
             current_index = clip.voice_end_time_index
 
@@ -899,6 +899,7 @@ class ShortFormVideo:
 
         match audio_generation_method:
             case "one-shot":
+                self.all_clips_info()
                 self.merge_video_audio_and_clip_visuals()
             case "multi-shot":
                 self.merge_clips_audios_and_visuals()
@@ -966,6 +967,27 @@ class ShortFormVideo:
             else:
                 invalid_clips.append(clip.clip_id)
         return valid_clips, invalid_clips
+
+    # This function is for debugging only
+    def all_clips_info(self):
+        """Shows all the information associated with all the clips in the video."""
+        print("\n\n")
+        print("-----All clips info----\n")
+        for clip in self.clips:
+            print(f"Clip ID: {clip.clip_id}")
+            print(f"Clip Duration: {clip.duration_seconds}")
+            print(f"Sub Clip Count {clip.sub_clip_count}")
+            print(f"last Sub Clip Duration: {clip.last_sub_clip_duration}")
+            print(f"Start Time: {clip.voice_over_start_time}")
+            print(f"End Time: {clip.voice_over_end_time}")
+            print(f"Voice Script: {clip.voice_script}")
+            print(f"Enhanced Voice Script: {clip.voice_script_enhanced_for_audio_generation}")
+            print("----Base images----")
+            for i, description in enumerate(clip.base_image_descriptions):
+                print(f"\t{i}. {description}")
+            print("----End Base Images----")
+            print(f"")
+        print("\n\n")
 
 
 
