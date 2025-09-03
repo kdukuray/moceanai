@@ -20,14 +20,14 @@ from system_prompts import (
     multi_shot_script_polishing_system_prompt,
     script_to_script_list_system_prompt,
     eleven_v3_audio_enhancer_system_prompt,
-    eleven_v2_audio_enhancer_system_prompt
+    eleven_v2_audio_enhancer_system_prompt, video_caption_generator_system_prompt
 )
 from ai_clients.openai_client import openai_semaphore
 from ai_clients.gemini_client import gemini_semaphore
 from ai_clients.elevenlabs_client import elevenlabs_semaphore, VoiceActor, elevenlabs_client
 from ai_models import ImageModel, VoiceModel, ModelProvider
 from clip import Clip
-from errors import AppError, MissingDataError, FailedGenerationError, FailedParsingError
+from errors import MissingDataError, FailedGenerationError, FailedParsingError
 from utils import extract_json_from_fence, MediaTone, MediaPurpose, MediaPlatform, AspectRatio, ImageStyle, invoke_llm
 
 # Makes sure the directories needed to store permanent and temporary media exists
@@ -36,7 +36,7 @@ for directory in required_directories:
     os.makedirs(os.path.join(os.getcwd(), directory), exist_ok=True)
 
 
-class ShortFormVideo:
+class Video:
     def __init__(self,
                  topic: str,
                  purpose: MediaPurpose,
@@ -104,6 +104,7 @@ class ShortFormVideo:
         # for media access inspection
         self.all_clips_valid: bool = False
         self.final_video_path: str = ""
+        self.video_caption: str = ""
 
 
     # Generation Methods
@@ -123,7 +124,7 @@ class ShortFormVideo:
         ]
         for field in required_fields:
             if not getattr(self, field):
-                raise MissingDataError(f"The data point {field} is missing and is required to generate goal.")
+                raise MissingDataError(f"The data point {field} is missing and is required to generate goal.", missing_field=field)
 
         payload = json.dumps({
             "topic": self.topic,
@@ -161,7 +162,7 @@ class ShortFormVideo:
         ]
         for field in required_fields:
             if not getattr(self, field):
-                raise MissingDataError(f"The data point {field} is missing and is required to generate hook.")
+                raise MissingDataError(f"The data point {field} is missing and is required to generate hook.", missing_field=field)
 
         payload = json.dumps({
             "topic": self.topic,
@@ -204,7 +205,7 @@ class ShortFormVideo:
         ]
         for field in required_fields:
             if not getattr(self, field):
-                raise MissingDataError(f"The data point {field} is missing and is required to generate talking points.")
+                raise MissingDataError(f"The data point {field} is missing and is required to generate talking points.", missing_field=field)
 
         payload = json.dumps({
             "topic": self.topic,
@@ -306,7 +307,7 @@ class ShortFormVideo:
         ]
         for field in required_fields:
             if not getattr(self, field):
-                raise MissingDataError(f"The data point {field} is missing and is required to generate a script in one shot.")
+                raise MissingDataError(f"The data point {field} is missing and is required to generate a script in one shot.", missing_field=field)
 
         payload = json.dumps({
             "topic": self.topic,
@@ -403,7 +404,7 @@ class ShortFormVideo:
         ]
         for field in required_fields:
             if not getattr(self, field):
-                raise MissingDataError(f"The data point {field} is missing and is required to generate a script in multi shots.")
+                raise MissingDataError(f"The data point {field} is missing and is required to generate a script in multi shots.", missing_field=field)
 
         current_cumulative_multi_shot_script = ""
 
@@ -456,7 +457,7 @@ class ShortFormVideo:
         ]
         for field in required_fields:
             if not getattr(self, field):
-                raise MissingDataError(f"The data point {field} is missing and is required to create clips.")
+                raise MissingDataError(f"The data point {field} is missing and is required to create clips.", missing_field=field)
 
         for script_segment_index, script_segment in enumerate(self.script_list):
             previous_clip_voice_script_index = script_segment_index - 1
@@ -507,7 +508,7 @@ class ShortFormVideo:
         ]
         for field in required_fields:
             if not getattr(self, field):
-                raise MissingDataError(f"The data point {field} is missing and is required to generate clips.")
+                raise MissingDataError(f"The data point {field} is missing and is required to generate clips.", missing_field=field)
 
         async with asyncio.TaskGroup() as tg:
             for clip in self.clips:
@@ -535,7 +536,7 @@ class ShortFormVideo:
         ]
         for field in required_fields:
             if not getattr(self, field):
-                raise MissingDataError(f"The data point {field} is missing and is required to generate video audio.")
+                raise MissingDataError(f"The data point {field} is missing and is required to generate video audio.", missing_field=field)
 
         text = "".join(self.audio_enhanced_script_list) if self.use_enhanced_script_for_audio_generation else "".join(self.script_list)
 
@@ -575,7 +576,7 @@ class ShortFormVideo:
         ]
         for field in required_fields:
             if not getattr(self, field):
-                raise MissingDataError(f"The data point {field} is missing and is required to assign start and end times to clips.")
+                raise MissingDataError(f"The data point {field} is missing and is required to assign start and end times to clips.", missing_field=field)
 
         # for debugging purposes.
         print("\n-----------")
@@ -645,7 +646,7 @@ class ShortFormVideo:
         ]
         for field in required_fields:
             if not getattr(self, field):
-                raise MissingDataError(f"The data point {field} is missing and is required to generate base image descriptions.")
+                raise MissingDataError(f"The data point {field} is missing and is required to generate base image descriptions.", missing_field=field)
 
         full_script = "".join(self.script_list)
         async with asyncio.TaskGroup() as tg:
@@ -685,7 +686,7 @@ class ShortFormVideo:
         ]
         for field in required_fields:
             if not getattr(self, field):
-                raise MissingDataError(f"The data point {field} is missing and is required to generate clip visuals.")
+                raise MissingDataError(f"The data point {field} is missing and is required to generate clip visuals.", missing_field=field)
 
         async with asyncio.TaskGroup() as tg:
             for clip in self.clips:
@@ -704,7 +705,7 @@ class ShortFormVideo:
         ]
         for field in required_fields:
             if not getattr(self, field):
-                raise MissingDataError(f"The data point {field} is missing and is required to animate clip visuals.")
+                raise MissingDataError(f"The data point {field} is missing and is required to animate clip visuals.", missing_field=field)
 
         for clip in self.clips:
             clip.animate_visuals(audio_generation_method=audio_generation_method)
@@ -725,7 +726,7 @@ class ShortFormVideo:
         ]
         for field in required_fields:
             if not getattr(self, field):
-                raise MissingDataError(f"The data point {field} is missing and is required to merge clip audios with clip visuals.")
+                raise MissingDataError(f"The data point {field} is missing and is required to merge clip audios with clip visuals.", missing_field=field)
 
         for clip in self.clips:
             clip.merge_audio_and_visuals()
@@ -746,7 +747,7 @@ class ShortFormVideo:
         ]
         for field in required_fields:
             if not getattr(self, field):
-                raise MissingDataError(f"The data point {field} is missing and is required to merge video audio with clip visuals.")
+                raise MissingDataError(f"The data point {field} is missing and is required to merge video audio with clip visuals.", missing_field=field)
         if not self.clips:
             raise Exception("Clip visuals cannot be merged without clips.")
         time_of_creation = datetime.now().strftime("%Y%m%d%H%M%S")
@@ -804,6 +805,7 @@ class ShortFormVideo:
                 self.generate_goal() # if it executes without error, break the loop
                 break
             except MissingDataError as e:
+               # the  fields for goal generation are all required during instantiation
                 raise Exception(f"{e}") # For Missing Data Errors, raise immediately
             except Exception as e:
                 print("Failed to generate goal, retrying...")
@@ -814,6 +816,7 @@ class ShortFormVideo:
             try:
                 self.generate_hook()
             except MissingDataError as e:
+                # the  fields for hook generation are all required during instantiation
                 raise Exception(f"{e}")
             except Exception as e:
                 print("Failed to generate hook, retrying...")
@@ -824,8 +827,19 @@ class ShortFormVideo:
             try:
                 self.generate_talking_points()
                 break
+
             except MissingDataError as e:
-                raise Exception(f"{e}")
+                # goal and hook are the only two data points that could be missing for generating talking points,
+                # all others are required during the initialization of the video object
+                if e.missing_field == "goal":
+                    self.generate_goal()
+                elif e.missing_field == "hook":
+                    self.generate_hook()
+                else:
+                    raise Exception(f"{e}")
+
+                print(f"Data point {e.missing_field} was missing in generation of talking points, attempting to re-generate {e.missing_field}...")
+
             except Exception as e:
                 print("Failed to generate talking point, retrying...")
                 if i == self.max_retries - 1:
@@ -838,7 +852,11 @@ class ShortFormVideo:
                         self.generate_script_one_shot()
                         break
                     except MissingDataError as e:
-                        raise Exception(f"{e}")
+                        if e.missing_field == "generated_talking_points":
+                            self.generate_talking_points()
+                        else:
+                            raise Exception(f"{e}")
+                        print(f"Data point {e.missing_field} was missing in generation of talking points, attempting to re-generate {e.missing_field}...")
                     except Exception as e:
                         print("Failed to generate script one-shot, retrying...")
                         if i == self.max_retries - 1:
@@ -850,7 +868,11 @@ class ShortFormVideo:
                         self.generate_script_multi_shot()
                         break
                     except MissingDataError as e:
-                        raise Exception(f"{e}")
+                        if e.missing_field == "generated_talking_points":
+                            self.generate_talking_points()
+                        else:
+                            raise Exception(f"{e}")
+                        print(f"Data point {e.missing_field} was missing in generation of talking points, attempting to re-generate {e.missing_field}...")
                     except Exception as e:
                         print("Failed to generate script multi-shot, retrying...")
                         if i == self.max_retries - 1:
@@ -905,6 +927,16 @@ class ShortFormVideo:
                 self.merge_clips_audios_and_visuals()
                 self.merge_all_clips()
 
+        for i in range(self.max_retries):
+            try:
+                self.generate_caption()
+            except MissingDataError as e:
+                if e.missing_field == "goal":
+                    self.generate_goal()
+                elif e.missing_field == "hook":
+                    self.generate_hook()
+                else:
+                    raise Exception(f"{e}")
         print("[Completed] Generated video...")
 
 
@@ -988,6 +1020,42 @@ class ShortFormVideo:
             print("----End Base Images----")
             print(f"")
         print("\n\n")
+
+    def generate_caption(self):
+        """
+        This function generates a caption from the video. This caption is stored on the video object.
+        Returns:
+             None
+        :return:
+        """
+        print("[Started] Generating caption...]")
+        required_fields = ["topic", "purpose", "target_audience", "platform", "tone", "goal", "hook"]
+        for field in required_fields:
+            if not getattr(self, field):
+                raise MissingDataError(f"The data point {field} is missing and is required to generate a caption.", missing_field=field)
+        payload = json.dumps({
+            "topic": self.topic,
+            "purpose": self.purpose.value,
+            "target_audience": self.target_audience,
+            "platform": self.platform.value,
+            "tone": self.tone.value,
+            "goal": self.goal,
+            "hook": self.hook,
+        })
+
+        try:
+            llm_response: str = invoke_llm(user_input=payload, system_instruction=video_caption_generator_system_prompt, model_provider=self.model_provider)
+        except Exception as e:
+            raise FailedGenerationError(f"Failed to generate polished multi shot script because of: {e}")
+
+        try:
+            video_caption: str = json.loads(extract_json_from_fence(llm_response)).get("video_caption")
+        except Exception as e:
+            raise FailedParsingError(f"Failed to parse video caption from json because of: {e}")
+
+        self.video_caption = video_caption
+        print("[Completed] Generated caption...")
+
 
 
 

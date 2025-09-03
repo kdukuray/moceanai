@@ -4,7 +4,7 @@ from crud import get_all_profiles
 from models import Profile
 from utils import MediaPurpose, MediaTone, MediaPlatform, AspectRatio, ImageStyle
 from ai_models import ImageModel, VoiceModel, ModelProvider
-from shortformvideo import ShortFormVideo
+from video import Video
 import asyncio
 from ai_clients.elevenlabs_client import VoiceActor
 
@@ -96,7 +96,7 @@ if "script_generation_method" not in st.session_state:
     st.session_state["script_generation_method"] = "one-shot"
 
 if "video" not in st.session_state:
-    st.session_state["video"] = ShortFormVideo(
+    st.session_state["video"] = Video(
         topic=st.session_state["topic"],
         purpose=MediaPurpose.EDUCATIONAL,
         target_audience=st.session_state["target_audience"],
@@ -253,7 +253,7 @@ def create_video():
         case _:
             image_style = ImageStyle.PHOTO_REALISM  # fallback
 
-    new_video = ShortFormVideo(
+    new_video = Video(
         topic=st.session_state["topic"],
         purpose=video_purpose,
         target_audience=st.session_state["target_audience"],
@@ -271,7 +271,7 @@ def create_video():
         voice_actor=voice_actor_options[st.session_state["voice_actor"]],
         auxiliary_image_requests=st.session_state["auxiliary_image_requests"],
     )
-    st.session_state["video"]: ShortFormVideo = new_video
+    st.session_state["video"]: Video = new_video
 
 # modify the mechanism for retrieving profiles later, this works now simply for mvp
 def populate_with_profile_data() -> None:
@@ -338,6 +338,8 @@ if st.session_state.video.topic:
 if st.session_state.video.final_video_path:
     final_video_path = st.session_state.video.get_final_video_path()
     st.video(final_video_path)
+    if st.session_state.video.video_caption:
+        st.write(st.session_state.video.video_caption)
 
 
 

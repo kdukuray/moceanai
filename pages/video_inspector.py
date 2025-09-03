@@ -1,6 +1,6 @@
 import streamlit as st
 import asyncio
-from shortformvideo import ShortFormVideo
+from video import Video
 
 st.title("🎬 Video Info")
 st.divider()

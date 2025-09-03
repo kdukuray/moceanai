@@ -3,8 +3,9 @@ class AppError(Exception):
 
 class MissingDataError(AppError):
     """Exception raised when data required for a process is missing"""
-    def __init__(self, message):
+    def __init__(self, message, missing_field: str = ""):
         super().__init__(message)
+        self.missing_field = missing_field
 
 class FailedGenerationError(AppError):
     """Exception raised when the generation of data fails"""
