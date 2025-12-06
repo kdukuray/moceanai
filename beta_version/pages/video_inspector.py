@@ -1,6 +1,5 @@
 import streamlit as st
 import asyncio
-from video import Video
 
 st.title("🎬 Video Info")
 st.divider()
@@ -16,7 +15,7 @@ else:
 
     # Section 1: Core Metadata
     st.subheader("📌 Core Metadata")
-    st.text(f"Central Theme: {st.session_state.video.topic}")
+    st.text(f"Central Theme: {st.session_state.video.topics}")
     st.text(f"Purpose: {st.session_state.video.purpose.value}")
     st.text(f"Target Audience: {st.session_state.video.target_audience}")
     st.text(f"Tone: {st.session_state.video.tone.value}")
@@ -27,8 +26,8 @@ else:
     st.text(f"Voice Model: {st.session_state.video.voice_model.value}")
     if st.session_state.video.style_reference:
         st.text(f"Style Reference: {st.session_state.video.style_reference}")
-    if st.session_state.video.auxiliary_requests:
-        st.text(f"Auxiliary Requests: {st.session_state.video.auxiliary_requests}")
+    if st.session_state.video.additional_instructions:
+        st.text(f"Auxiliary Requests: {st.session_state.video.additional_instructions}")
 
     # Section 2: Script + State
     st.subheader("📄 Cumulative Script")

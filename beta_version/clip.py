@@ -11,13 +11,13 @@ from math import ceil
 
 from pydub.utils import mediainfo
 
-from ai_models import ImageModel, VoiceModel, ModelProvider
-from ai_clients.openai_client import openai_client, openai_semaphore
-from ai_clients.elevenlabs_client import elevenlabs_client, VoiceActor
-from ai_clients.gemini_client import gemini_client
+from beta_version.ai_models import ImageModel, VoiceModel, ModelProvider
+from beta_version.ai_clients.openai_client import openai_client, openai_semaphore
+from beta_version.ai_clients import elevenlabs_client, VoiceActor
+from beta_version.ai_clients import gemini_client
 from google.genai.types import GenerateImagesConfig
-from utils import MediaTone, AspectRatio, extract_json_from_fence, ImageStyle, invoke_llm
-from system_prompts import base_image_descriptions_generator_system_prompt
+from old_utils import MediaTone, AspectRatio, extract_json_from_fence, ImageStyle, invoke_llm
+from system_prompts import base_image_descriptions_generator_system_prompt_no_face
 
 os.makedirs("base_images", exist_ok=True)
 os.makedirs("voice_over_audios", exist_ok=True)
@@ -290,7 +290,7 @@ class Clip:
             "num_of_sub_clips": self.sub_clip_count if self.sub_clip_count > 0 else 1,
         }
 
-        system_prompt = {"role": "system", "content": base_image_descriptions_generator_system_prompt}
+        system_prompt = {"role": "system", "content": base_image_descriptions_generator_system_prompt_no_face}
         user_input = {"role": "user", "content": json.dumps(payload)}
         messages: list[dict[str, str]] = [system_prompt, user_input]
         clip_base_image_descriptions = []

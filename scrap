@@ -293,3 +293,1132 @@ phony scripts:
     #     print(f"Final Video path {self.get_final_video_path()}")
     #
     #
+
+
+-----
+from langchain.chat_models import init_chat_model
+from langchain.messages import AIMessage, HumanMessage
+from pydantic import BaseModel, Field
+from typing import Optional, Literal
+import json
+from langchain.chat_models import init_chat_model
+from vidgen_interface import image_style, voice_model
+from system_prompts import (short_form_video_goal_generation_system_prompt,
+                            short_form_video_hook_generation_system_prompt,
+                            short_form_video_talking_point_generation_system_prompt)
+
+ai_model = init_chat_model(model_provider="google-genai", model="gemini-2.5-pro")
+
+model_providers = Literal["google", "openai", "claude", "xai", "deepseek"]
+image_models = Literal["google", "openai"]
+image_styles = Literal[
+    "Photo Realism",
+    "Hyperrealism",
+    "Cartoon / 2D Illustration",
+    "Minimalist / Flat Illustration",
+    "Comic / Manga",
+    "Cinematic",
+    "3D Render / CGI",
+    "Fantasy / Surreal",
+    "Vintage / Retro",
+]
+voice_model_versions = Literal["v2", "v3"]
+voice_actors = Literal[
+    "american_male_narrator",
+    "american_male_conversationalist",
+    "american_female_conversationalist",
+    "british_male_narrator",
+    "british_female_narrator",
+]
+class AgentState(BaseModel):
+    topic: str = Field(..., description="The topic of the video")
+    purpose: str = Field(..., description="What the video wishes to accomplish of the video")
+    target_audience: str = Field(..., description="The intended audience for the video")
+    type: Literal["Short-form", "Long-form"] = Field(..., description="The type of the video")
+    tone: str = Field(..., description="The tone or mood of the video (e.g., informative, humorous)")
+    platform: str = Field(..., description="The platform the video will be posted on (e.g., TikTok, YouTube)")
+    duration_seconds: int = Field(..., description="The length of the video in seconds")
+    # style_reference: Optional[str] = Field(None, description="Reference style or example for video creation")
+    auxiliary_requests: Optional[str] = Field(None, description="Any extra requests or creative directions")
+    use_enhanced_script_for_audio_generation: bool = Field(
+        False, description="Whether to use an enhanced version of the script for audio generation"
+    )
+    # aspect_ratio: str = Field(..., description="The aspect ratio of the video (e.g., 16:9, 9:16)")
+    model_provider: model_providers = Field(..., description="The model provider that will be used to generate the video script and metadata")
+    image_model: image_models = Field(..., description="The image generation model used")
+    image_style: image_styles = Field(..., description="The artistic style for generated images")
+    voice_model_version: voice_model_versions = Field(..., description="The model used for voice generation")
+    voice_actor: voice_actors = Field(..., description="The chosen voice actor or voice type")
+    auxiliary_image_requests: Optional[str] = Field(
+        None, description="Additional image prompts or instructions for visuals"
+    )
+
+class GoalContainer(BaseModel):
+    goal: str = Field(..., description="The goal of the video to be produced.")
+class HookContainer(BaseModel):
+    goal: str = Field(..., description="The hook of the video to be produced.")
+
+# "talking_points": [
+#     {
+#       "id": "<string> — A unique identifier for the point's narrative role (e.g., 'context', 'problem', 'solution_1', 'example', 'payoff', 'cta').",
+#       "objective": "<string> — The specific objective of this talking point (e.g., 'Set the stakes', 'Reveal the core mistake', 'Deliver the main value', 'Drive action').",
+#       "desired_duration_seconds": "<integer> — The estimated maximum duration in seconds for this point to be covered.",
+#       "topic": "<string> — The concise talking point or concept to be communicated."
+#     }
+#   ]
+class TalkingPoint(BaseModel):
+    id: str = Field(..., description="A unique identifier for the point's narrative role.")
+    objective: str = Field(..., description="The specific objective of this talking point.")
+    desired_duration: int = Field(..., description="The estimated maximum duration in seconds for this point to be covered.")
+    topic: str = Field(..., description="The topic of the talking point.")
+
+class TalkingPointsContainer(BaseModel):
+    talking_points: list[TalkingPoint] = Field(..., description="List of the talking points to be included in the video.")
+
+class ScriptOneShotContainer(BaseModel):
+    raw_script: str = Field(..., description="The raw script for the in the video.")
+
+class ScriptMultiShotContainer(BaseModel):
+    script_segments: list[str] = Field(..., description="The list of strings that are each parts of the full video script.")
+
+class PolishedScriptContainer(BaseModel):
+    raw_script: str = Field(..., description="The polished raw script for the in the video.")
+# utils
+
+def polish_multi_shot_script(raw_multi_shot_script: str) -> str:
+    """
+    UPDATE THIS
+    """
+    model_for_polished_script = ai_model.with_structured_output(PolishedScriptContainer)
+    payload = json.dumps({
+        "raw_script": raw_multi_shot_script
+    })
+    polished_script_container: BaseModel = model_for_polished_script.invoke(payload)
+    return polished_script_container.raw_script
+
+
+
+def generate_goal(state: AgentState) -> dict[str, str]:
+    """
+    This function generates the main goal of the video using the target audience, topic and purpose of the video.
+    The goal is a sentence describing the angle that the video is taking and what the video intends to achieve.
+    It returns a dictionary with a single `goal` key
+    Returns:
+        dict[str, str]: Dictionary containing the goal for the video
+    """
+    model_for_goal = ai_model.with_structured_output(GoalContainer)
+    payload = json.dumps({
+        "topic": state.topic,
+        "purpose": state.purpose,
+        "target_audience": state.target_audience,
+    })
+    system_message = AIMessage(content=short_form_video_goal_generation_system_prompt)
+    user_message = HumanMessage(content=payload)
+    messages = [system_message, user_message]
+    goal_container: BaseModel = model_for_goal.invoke(messages)
+    return {"goal": goal_container.goal}
+
+def generate_hook(state: AgentState) -> dict[str, str]:
+    """
+    This function generates the hook of the video using the information on the video object.
+    The hook is the opener to the video and the most important line in short form content.
+    It returns a dictionary with a single `hook` key
+    Returns:
+        dict[str, str]: Dictionary containing the hook for the video
+    """
+    model_for_hook = ai_model.with_structured_output(HookContainer)
+    payload = json.dumps({
+        "topic": state.topic,
+        "purpose": state.purpose,
+        "target_audience": state.target_audience,
+        "tone": state.tone,
+        # hard coding this for now, change later
+        "platform": "Instagram and Tiktok",
+    })
+    system_message = AIMessage(content=short_form_video_hook_generation_system_prompt)
+    user_message = HumanMessage(content=payload)
+    messages = [system_message, user_message]
+    hook_container: BaseModel = model_for_hook.invoke(messages)
+    return {"hook": hook_container.hook}
+
+
+def generate_talking_points(state: AgentState) -> dict[str, list[dict]]:
+    """
+    This function generates the talking points of the video. It uses various data points on the video to generate the talking points.
+    Returns:
+        dict[str, list[dict]]: Dictionary containing the talking points of the video.
+    """
+    model_for_talking_points = ai_model.with_structured_output(TalkingPointsContainer)
+
+    payload = json.dumps({
+        "topic": state.topic,
+        "purpose": state.purpose,
+        "goal": state.goal,
+        "hook": state.hook,
+        "target_audience": state.target_audience,
+        "tone": state.tone,
+        "duration_seconds": state.duration_seconds,
+        "auxiliary_requests": state.auxiliary_requests,
+    })
+
+    system_message = AIMessage(content=short_form_video_talking_point_generation_system_prompt)
+    user_message = HumanMessage(content=payload)
+    messages = [system_message, user_message]
+    talking_points_container: BaseModel = model_for_talking_points.invoke(messages)
+    return {"talking_points": [talking_point.model_dump() for talking_point in talking_points_container.talking_points]}
+
+def generate_script_one_shot(state: AgentState) -> dict[str, str]:
+    """
+        This function generates the script of the video using the information on the video object and generated the talking points.
+        It generates the script for the entire video in one shot.
+        The script is then enhanced for audio generation.
+        Both the script and it's enhanced version are stored as a lists of string in the video object's
+        `script_list` and `audio_enhanced_script_list` properties respectively.
+        Returns:
+            None
+    """
+    model_for_script_one_shot = ai_model.with_structured_output(ScriptOneShotContainer)
+    payload = json.dumps({
+        "topic": state.topic,
+        "talking_points": "".join([talking_point.get("topic") for talking_point in state.generated_talking_points]),
+        "goal": state.goal,
+        "hook": state.hook,
+        "purpose": state.purpose,
+        "target_audience": state.target_audience,
+        "tone": state.tone,
+        "auxiliary_requests": state.auxiliary_requests,
+        "platform": "Instagram and Tiktok",
+        "duration_seconds": state.duration_seconds,
+        "style_reference": state.style_reference,
+    })
+
+    system_message = AIMessage(content=short_form_video_talking_point_generation_system_prompt)
+    user_message = HumanMessage(content=payload)
+    messages = [system_message, user_message]
+    script_one_shot_container: BaseModel = model_for_script_one_shot.invoke(messages)
+    return {"audio_script": script_one_shot_container.script_one_shot.model_dump().get("raw_script", "")}
+
+
+def generate_script_multi_shot(state: AgentState) -> dict[str, str]:
+    current_cumulative_multi_shot_script = ""
+
+    # generating script segments for each talking point is done sequentially (not concurrently)because each
+    # segment's generation relies on the portion of the script that has already been generated to improve
+    # the cohesion of the script.
+    for talking_point in state.generated_talking_points:
+        payload = json.dumps({
+            "topic": state.topic,
+            "current_talking_point": talking_point,
+            "goal": state.goal,
+            "hook": state.hook,
+            "purpose": state.purpose,
+            "target_audience": state.target_audience,
+            "tone": state.tone,
+            "auxiliary_requests": state.auxiliary_requests,
+            "platform": "Instagram and Tiktok",
+            "duration_seconds": state.duration_seconds,
+            "style_reference": state.style_reference,
+            "all_talking_points": state.generated_talking_points,
+            "current_script": current_cumulative_multi_shot_script
+        })
+
+        # We get the portion of the script that was generated
+        script_segment: str = state.generate_script_segment_from_talking_point_for_multi_shot_script_generation(payload)
+        current_cumulative_multi_shot_script += script_segment
+    # now we have the whole script as text.
+    polished_script: str = polish_multi_shot_script(json.dumps({"raw_script": current_cumulative_multi_shot_script}))
+    return {"audio_script": polished_script}
+
+
+def split_scirpt
+    # extract the raw one shot script
+    try:
+        generated_script: str = json.loads(extract_json_from_fence(llm_response)).get("raw_script")
+    except Exception as e:
+        raise FailedParsingError(f"Failed to parse one-shot script from json because of: {e}")
+    # get the enhanced for audio generation version of the script
+    audio_enhanced_script: str = self.enhance_script_for_audio_generation(raw_script=generated_script)
+    # split both the raw and enhanced versions of the script
+    script_list_and_audio_enhanced_script_list: list[dict[str, str]] = self.split_scripts_into_script_lists(raw_script=generated_script, audio_enhanced_script=audio_enhanced_script)
+    # store them in the video object's properties
+    self.script_list = [script_object.get("script_segment", "") for script_object in script_list_and_audio_enhanced_script_list]
+    self.audio_enhanced_script_list = [script_object.get("audio_enhanced_script_segment", "") for script_object in script_list_and_audio_enhanced_script_list]
+    print("[Complete] Generating script one-shot...\n")
+
+
+
+
+async def generate_image_descriptions(state: AgentState) -> dict[str, list[dict[str, str]]]:
+    """"""
+    if state.debug_mode:
+        print("Generating image descriptions...")
+    model_for_sgemenimage_descriptions = ai_model.with_structured_output(ImageDescriptionsContainer)
+
+    last_clip_durations = []
+    async with asyncio.TaskGroup() as t:
+        for index in range(len(state.script_list)):
+            # calculate num of clips in the segment and length of the last image in it
+            num_of_images_per_segment, last_sub_clip_duration = compute_length_and_num_of_images_per_segment(
+                state.script_segment_durations[index], 3, 2)
+            last_clip_durations.append(last_sub_clip_duration)
+
+            # Construct payload to create image descriptions
+            payload = {
+                "script_segment": state.script_list[index]["script"],
+                "full_script": state.script,
+                "additional_image_requests": state.additional_image_requests,
+                "image_style": state.image_style,
+                "topic": state.topic,
+                "tone": state.tone,
+                "num_of_image_descriptions": num_of_images_per_segment
+
+            }
+
+
+
+    payload = json.dumps({
+        "script_list": [script_segment.get("script") for script_segment in state.script_list],
+        "additional_image_requests": state.additional_image_requests,
+        "image_style": state.image_style,
+        "topic": state.topic,
+        "tone": state.tone,
+    })
+    system_message = AIMessage(content=image_descriptions_generator_system_prompt)
+    user_message = HumanMessage(content=payload)
+    messages = [system_message, user_message]
+    image_descriptions_container: BaseModel = model_for_image_descriptions.invoke(messages)
+    return {"image_descriptions": image_descriptions_container.model_dump().get("image_descriptions", [])}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+async def generate_clip_images(state: AgentState) -> dict[str, list[Path]]:
+    if state.debug_mode:
+        print("Generating clip images...")
+    image_paths = []
+    async with asyncio.TaskGroup() as t:
+        for segment_image_descriptions_obj in state.all_segments_image_descriptions_list:
+            # a list of ImageDescriptions
+            image_descriptions_for_segment = segment_image_descriptions_obj.get("image_descriptions")
+            num_of_images_to_create = len(image_descriptions_for_segment)
+            image_descriptions_as_text = [image_description.description for image_description in image_descriptions_for_segment]
+            image_paths = [Path(os.getcwd()) / "generated_image_files" / f"{uuid.uuid4().hex}.jpg" for _ in range(num_of_images_to_create)]
+
+            image_path = Path(os.getcwd()) / "generated_image_files" / f"{uuid.uuid4().hex}.jpg"
+            image_path.parent.mkdir(parents=True, exist_ok=True)
+            image_paths.append(image_path)
+            t.create_task(asyncio.to_thread(generate_single_image, image_description.description, image_path, "openai", "portrait"))
+
+    return {"image_paths": image_paths}
+
+async def animate_clip_images(state: AgentState) -> dict[str, list[Path]]:
+    if state.debug_mode:
+        print("Generating animated clip images...")
+    video_paths = []
+    async with asyncio.TaskGroup() as t:
+        for i in range(len(state.image_paths)):
+            video_path = Path(os.getcwd()) / "generated_video_files" / f"{uuid.uuid4().hex}.mp4"
+            video_path.parent.mkdir(parents=True, exist_ok=True)
+            video_paths.append(video_path)
+            t.create_task(asyncio.to_thread(animate_with_motion_effect, state.image_paths[i], video_path, state.script_segment_durations[i],
+                                            "pan_right" if i % 2 == 0 else "pan_left"))
+
+    return {"video_paths": video_paths}
+
+
+motion_styles = {
+        "pan_right": {
+            # Slight zoom in so there's room to pan
+            "z": "1.1",
+            # Move x from 0 → (iw - iw/zoom) over the clip
+            "x": f"(iw - iw/zoom) * on / {total_frames}",
+            # Keep vertically centered
+            "y": "ih/2 - (ih/zoom/2)",
+        },
+        "pan_left": {
+            "z": "1.1",
+            # Move x from right → left
+            "x": f"(iw - iw/zoom) * (1 - on / {total_frames})",
+            "y": "ih/2 - (ih/zoom/2)",
+        },
+        "pan_down": {
+            "z": "1.1",
+            "x": "iw/2 - (iw/zoom/2)",
+            # Move y from top → bottom
+            "y": f"(ih - ih/zoom) * on / {total_frames}",
+        },
+        "pan_up": {
+            "z": "1.1",
+            "x": "iw/2 - (iw/zoom/2)",
+            # Move y from bottom → top
+            "y": f"(ih - ih/zoom) * (1 - on / {total_frames})",
+        },
+
+        # "pan_right": {
+        #     "z": "1",
+        #     "x": f"iw/2-(iw/zoom/2)+on*{30 / fps}",
+        #     "y": "ih/2-(ih/zoom/2)",
+        # },
+        # "pan_left": {
+        #     "z": "1",
+        #     "x": f"iw/2-(iw/zoom/2)-on*{30 / fps}",
+        #     "y": "ih/2-(ih/zoom/2)",
+        # },
+        # "pan_down": {
+        #     "z": "1",
+        #     "x": "iw/2-(iw/zoom/2)",
+        #     "y": f"ih/2-(ih/zoom/2)+on*{30 / fps}",
+        # },
+        # "pan_up": {
+        #     "z": "1",
+        #     "x": "iw/2-(iw/zoom/2)",
+        #     "y": f"ih/2-(ih/zoom/2)-on*{30 / fps}",
+        # },
+        "zoom_in": {
+            "z": f"min(1+on/{total_frames}*0.2,1.2)",
+            "x": "iw/2-(iw/zoom/2)",
+            "y": "ih/2-(ih/zoom/2)",
+        },
+        "zoom_out": {
+            "z": f"max(1.2-on/{total_frames}*0.2,1)",
+            "x": "iw/2-(iw/zoom/2)",
+            "y": "ih/2-(ih/zoom/2)",
+        },
+        "rock_horizontal": {
+            "z": "1.05",
+            # super gentle sway: period ~ 4s, amplitude 15px
+            "x": f"iw/2-(iw/zoom/2)+sin(on*PI/{fps}*0.5)*15",
+            "y": "ih/2-(ih/zoom/2)",
+        },
+        "rock_vertical": {
+            "z": "1.05",
+            "x": "iw/2-(iw/zoom/2)",
+            "y": f"ih/2-(ih/zoom/2)+sin(on*PI/{fps}*0.5)*15",
+        },
+        "ken_burns": {
+            "z": f"min(1+on/{total_frames}*0.1,1.1)",
+            "x": f"iw/2-(iw/zoom/2)+on*{30 / fps}",
+            "y": f"ih/2-(ih/zoom/2)+on*{30 / fps}",  # fixed ih here
+        },
+    }
+
+
+    --------
+
+# def animate_image(image_path: Path, duration: float, video_path: Path):
+#     video_file = ffmpeg.input(image_path, loop=1, t=duration, framerate=30).output(video_path, vcodec="libx264")
+#     video_file.run()
+def animate_with_motion_effect(image_paths: Path | list[Path], video_path: Path, ideal_image_duration: float,
+                               last_image_duration: float, motion_pattern: str | list[str] = "ken_burns",
+                               motion_start_index: int = 0, orientation: str = "portrait"):
+    if isinstance(image_paths, Path):
+        image_paths = [image_paths]
+    num_of_images = len(image_paths)
+    fps = 30
+    output_size = "1080x1920" if orientation == "portrait" else "1920x1080"
+    width, height = map(int, output_size.split("x"))
+    total_frames = int(ideal_image_duration * fps)
+    pattern_index = motion_start_index
+    pattern_length = len(motion_pattern)
+
+    motion_styles = {
+        "pan_right": {
+            # Slight zoom in so there's room to pan
+            "z": "1.1",
+            # Move x from 0 → (iw - iw/zoom) over the clip
+            "x": f"(iw - iw/zoom) * on / {total_frames}",
+            # Keep vertically centered
+            "y": "ih/2 - (ih/zoom/2)",
+        },
+        "pan_left": {
+            "z": "1.1",
+            # Move x from right → left
+            "x": f"(iw - iw/zoom) * (1 - on / {total_frames})",
+            "y": "ih/2 - (ih/zoom/2)",
+        },
+        "pan_down": {
+            "z": "1.1",
+            "x": "iw/2 - (iw/zoom/2)",
+            # Move y from top → bottom
+            "y": f"(ih - ih/zoom) * on / {total_frames}",
+        },
+        "pan_up": {
+            "z": "1.1",
+            "x": "iw/2 - (iw/zoom/2)",
+            # Move y from bottom → top
+            "y": f"(ih - ih/zoom) * (1 - on / {total_frames})",
+        },
+        "zoom_in": {
+            "z": f"min(1+on/{total_frames}*0.2,1.2)",
+            "x": "iw/2-(iw/zoom/2)",
+            "y": "ih/2-(ih/zoom/2)",
+        },
+        "zoom_out": {
+            "z": f"max(1.2-on/{total_frames}*0.2,1)",
+            "x": "iw/2-(iw/zoom/2)",
+            "y": "ih/2-(ih/zoom/2)",
+        },
+        "rock_horizontal": {
+            "z": "1.05",
+            # super gentle sway: period ~ 4s, amplitude 15px
+            "x": f"iw/2-(iw/zoom/2)+sin(on*PI/{fps}*0.5)*15",
+            "y": "ih/2-(ih/zoom/2)",
+        },
+        "rock_vertical": {
+            "z": "1.05",
+            "x": "iw/2-(iw/zoom/2)",
+            "y": f"ih/2-(ih/zoom/2)+sin(on*PI/{fps}*0.5)*15",
+        },
+        "ken_burns": {
+            "z": f"min(1+on/{total_frames}*0.1,1.1)",
+            "x": f"iw/2-(iw/zoom/2)+on*{30 / fps}",
+            "y": f"ih/2-(ih/zoom/2)+on*{30 / fps}",  # fixed ih here
+        },
+    }
+
+
+    try:
+        sub_clips = []
+        for index, image_path in enumerate(image_paths):
+            new_clip = ffmpeg.input(str(image_path), loop=1,
+                                        t=ideal_image_duration if image_path != image_paths[-1] else last_image_duration)
+
+            new_clip = new_clip.filter("zoompan",
+                            z=motion_styles[motion_pattern[pattern_index % pattern_length]]["z"],
+                            x=motion_styles[motion_pattern[pattern_index % pattern_length]]["x"],
+                            y=motion_styles[motion_pattern[pattern_index % pattern_length]]["y"],
+                            d=1,
+                            fps=fps)
+            pattern_index += 1
+            sub_clips.append(new_clip)
+
+        animated_video_stream = ffmpeg.concat(*sub_clips, v=1, a=0).node[0]
+        outfile = ffmpeg.output(animated_video_stream, str(video_path), vcodec="libx264", pix_fmt="yuv420p")
+        outfile.run()
+
+        #
+        # sub_clips = [ffmpeg.input(str(image_path), loop=1, t=duration) for image_path in image_paths if image_path != image_paths[-1] else ]
+        # for sub_clip in sub_clips:
+        # sub_clips = [ffmpeg.input(image_path).filter("zoompan",
+        #                                              z=motion_styles[desired_motion_combo[index % len(desired_motion_combo)]]["z"],
+        #                                              x=motion_styles[desired_motion_combo[index % len(desired_motion_combo)]]["x"],
+        #                                              y=motion_styles[desired_motion_combo[index % len(desired_motion_combo)]]["y"],
+        #                                              d=1,
+        #                                              t=4,
+        #                                              s=output_size,
+        #                                              fps=fps,
+        #                                              ) for index, image_path in enumerate(image_paths) if image_path != image_paths[-1] else
+        # ffmpeg.input(image_path).filter("zoompan",
+        #                                              z=motion_styles[desired_motion_combo[index % len(desired_motion_combo)]]["z"],
+        #                                              x=motion_styles[desired_motion_combo[index % len(desired_motion_combo)]]["x"],
+        #                                              y=motion_styles[desired_motion_combo[index % len(desired_motion_combo)]]["y"],
+        #                                              d=1,
+        #                                              t=4,
+        #                                              s=output_size,
+        #                                              fps=fps,
+        #                                              )
+        #
+        # ]
+
+        # in_file = (
+        #     ffmpeg
+        #     .input(str(image_paths), loop=1)  # no framerate here
+        #     # BIG upscale to avoid jitter:
+        #     .filter("scale", w=width * 6, h=-1)
+        #     .filter(
+        #         "zoompan",
+        #         z=params["z"],
+        #         x=params["x"],
+        #         y=params["y"],
+        #         d=1,                # 1 input frame -> 1 output frame
+        #         s=output_size,
+        #         fps=fps,            # zoompan sets the output FPS
+        #     )
+        # )
+        #
+        # out_file = ffmpeg.output(
+        #     in_file,
+        #     str(video_path),
+        #     vcodec="libx264",
+        #     pix_fmt="yuv420p",
+        #     t=duration,
+        #     crf="23",
+        #     preset="medium",
+        #     # no extra -r here; zoompan already output at `fps`
+        # )
+
+        # out_file.run(overwrite_output=True, capture_stdout=True, capture_stderr=True)
+
+    except ffmpeg.Error as e:
+        error_message = e.stderr.decode() if e.stderr else str(e)
+        raise RuntimeError(f"FFmpeg error while animating {image_paths}: {error_message}")
+
+# claude was ok but jittery
+# def animate_image(image_path: Path, video_path: Path, duration: float, motion_style: str = "rock_horizontal"):
+#     fps = 30
+#     output_size = "1024x1024"
+#     width, height = map(int, output_size.split('x'))
+#
+#     # Calculate total frames
+#     total_frames = int(duration * fps)
+#     motion_styles = {
+#         'pan_right': {
+#             'z': '1',
+#             'x': f'iw/2-(iw/zoom/2)+on*{10 / fps}',  # Reduced from 30 to 10
+#             'y': 'ih/2-(ih/zoom/2)',
+#         },
+#         'pan_left': {
+#             'z': '1',
+#             'x': f'iw/2-(iw/zoom/2)-on*{10 / fps}',  # Reduced from 30 to 10
+#             'y': 'ih/2-(ih/zoom/2)',
+#         },
+#         'pan_down': {
+#             'z': '1',
+#             'x': 'iw/2-(iw/zoom/2)',
+#             'y': f'ih/2-(ih/zoom/2)+on*{10 / fps}',  # Reduced from 30 to 10
+#         },
+#         'pan_up': {
+#             'z': '1',
+#             'x': 'iw/2-(iw/zoom/2)',
+#             'y': f'ih/2-(ih/zoom/2)-on*{10 / fps}',  # Reduced from 30 to 10
+#         },
+#         'zoom_in': {
+#             'z': f'min(1+on/{total_frames}*0.2,1.2)',  # Reduced from 0.5 to 0.2, max zoom from 1.5 to 1.2
+#             'x': 'iw/2-(iw/zoom/2)',
+#             'y': 'ih/2-(ih/zoom/2)',
+#         },
+#         'zoom_out': {
+#             'z': f'max(1.2-on/{total_frames}*0.2,1)',  # Reduced from 0.5 to 0.2, starting zoom from 1.5 to 1.2
+#             'x': 'iw/2-(iw/zoom/2)',
+#             'y': 'ih/2-(ih/zoom/2)',
+#         },
+#         'rock_horizontal': {
+#             'z': '1.05',  # Reduced zoom from 1.1 to 1.05
+#             'x': f'iw/2-(iw/zoom/2)+sin(on*PI/{fps}*0.5)*15',  # Reduced amplitude from 25 to 15, slowed frequency
+#             'y': 'ih/2-(ih/zoom/2)',
+#         },
+#         'rock_vertical': {
+#             'z': '1.05',  # Reduced zoom from 1.1 to 1.05
+#             'x': 'iw/2-(iw/zoom/2)',
+#             'y': f'ih/2-(ih/zoom/2)+sin(on*PI/{fps}*0.5)*15',  # Reduced amplitude from 25 to 15, slowed frequency
+#         },
+#         'ken_burns': {
+#             'z': f'min(1+on/{total_frames}*0.1,1.1)',  # Keep 0.1, but reduced max zoom from 1.3 to 1.1
+#             'x': f'iw/2-(iw/zoom/2)+on*{5 / fps}',  # Reduced from 15 to 5
+#             'y': f'ih/2-(iw/zoom/2)+on*{3 / fps}',  # Reduced from 10 to 3
+#         }
+#     }
+#
+#     if motion_style not in motion_styles:
+#         raise ValueError(f"Unknown motion style: {motion_style}")
+#
+#     params = motion_styles[motion_style]
+#
+#     try:
+#         # Build the ffmpeg pipeline
+#         in_file = (
+#             ffmpeg
+#             .input(str(image_path), loop=1, framerate=fps)  # Remove t=duration from input
+#             .filter('scale', w=int(width * 1.2), h=-1)
+#             .filter('zoompan',
+#                     z=params['z'],
+#                     x=params['x'],
+#                     y=params['y'],
+#                     d=total_frames,  # Use total_frames instead of 1
+#                     s=output_size,
+#                     fps=fps)
+#         )
+#
+#         # Output with proper settings
+#         out_file = ffmpeg.output(
+#             in_file,
+#             str(video_path),
+#             vcodec='libx264',
+#             pix_fmt='yuv420p',
+#             t=duration,  # Move duration limit to output
+#             **{'crf': '23', 'preset': 'medium', 'r': str(fps)}
+#         )
+#
+#         out_file.run(overwrite_output=True, capture_stdout=True, capture_stderr=True)
+#
+#     except ffmpeg.Error as e:
+#         error_message = e.stderr.decode() if e.stderr else str(e)
+#         raise RuntimeError(f"FFmpeg error while animating {image_path}: {error_message}")
+
+
+    # motion_styles = {
+    #     'pan_right': {
+    #         'z': '1',
+    #         'x': f'iw/2-(iw/zoom/2)+on*{30 / fps}',
+    #         'y': 'ih/2-(ih/zoom/2)',
+    #     },
+    #     'pan_left': {
+    #         'z': '1',
+    #         'x': f'iw/2-(iw/zoom/2)-on*{30 / fps}',
+    #         'y': 'ih/2-(ih/zoom/2)',
+    #     },
+    #     'pan_down': {
+    #         'z': '1',
+    #         'x': 'iw/2-(iw/zoom/2)',
+    #         'y': f'ih/2-(ih/zoom/2)+on*{30 / fps}',
+    #     },
+    #     'pan_up': {
+    #         'z': '1',
+    #         'x': 'iw/2-(iw/zoom/2)',
+    #         'y': f'ih/2-(ih/zoom/2)-on*{30 / fps}',
+    #     },
+    #     'zoom_in': {
+    #         'z': f'min(1+on/{total_frames}*0.5,1.5)',  # Cleaner calculation
+    #         'x': 'iw/2-(iw/zoom/2)',
+    #         'y': 'ih/2-(ih/zoom/2)',
+    #     },
+    #     'zoom_out': {
+    #         'z': f'max(1.5-on/{total_frames}*0.5,1)',
+    #         'x': 'iw/2-(iw/zoom/2)',
+    #         'y': 'ih/2-(ih/zoom/2)',
+    #     },
+    #     'rock_horizontal': {
+    #         'z': '1.1',
+    #         'x': f'iw/2-(iw/zoom/2)+sin(on*PI/{fps})*25',  # Use PI constant
+    #         'y': 'ih/2-(ih/zoom/2)',
+    #     },
+    #     'rock_vertical': {
+    #         'z': '1.1',
+    #         'x': 'iw/2-(iw/zoom/2)',
+    #         'y': f'ih/2-(ih/zoom/2)+sin(on*PI/{fps})*25',
+    #     },
+    #     'ken_burns': {
+    #         'z': f'min(1+on/{total_frames}*0.1,1.3)',
+    #         'x': f'iw/2-(iw/zoom/2)+on*{15 / fps}',
+    #         'y': f'ih/2-(ih/zoom/2)+on*{10 / fps}',
+    #     }
+    # }
+
+# def animate_image(image_path: Path, video_path: Path, duration: float, motion_style: str = "ken_burns"):
+#     fps = 120
+#     output_size = "1024x1024"
+#     width, height = map(int, output_size.split('x'))
+#
+#     # Calculate total frames
+#     total_frames = int(duration * fps)
+#
+#     motion_styles = {
+#         'pan_right': {
+#             'z': '1',
+#             'x': f'iw/2-(iw/zoom/2)+on*{30 / fps}',  # on = output frame number
+#             'y': 'ih/2-(ih/zoom/2)',
+#             'd': 1  # Duration per frame
+#         },
+#         'pan_left': {
+#             'z': '1',
+#             'x': f'iw/2-(iw/zoom/2)-on*{30 / fps}',
+#             'y': 'ih/2-(ih/zoom/2)',
+#             'd': 1
+#         },
+#         'pan_down': {
+#             'z': '1',
+#             'x': 'iw/2-(iw/zoom/2)',
+#             'y': f'ih/2-(ih/zoom/2)+on*{30 / fps}',
+#             'd': 1
+#         },
+#         'pan_up': {
+#             'z': '1',
+#             'x': 'iw/2-(iw/zoom/2)',
+#             'y': f'ih/2-(ih/zoom/2)-on*{30 / fps}',
+#             'd': 1
+#         },
+#         'zoom_in': {
+#             'z': f'min(1+on*{0.5 / (total_frames)},1.5)',  # Zoom from 1x to 1.5x
+#             'x': 'iw/2-(iw/zoom/2)',
+#             'y': 'ih/2-(ih/zoom/2)',
+#             'd': 1
+#         },
+#         'zoom_out': {
+#             'z': f'max(1.5-on*{0.5 / (total_frames)},1)',  # Zoom from 1.5x to 1x
+#             'x': 'iw/2-(iw/zoom/2)',
+#             'y': 'ih/2-(ih/zoom/2)',
+#             'd': 1
+#         },
+#         'rock_horizontal': {
+#             'z': '1.1',
+#             'x': f'iw/2-(iw/zoom/2)+sin(on/{fps}*0.5)*25',  # Sine wave motion
+#             'y': 'ih/2-(ih/zoom/2)',
+#             'd': 1
+#         },
+#         'rock_vertical': {
+#             'z': '1.1',
+#             'x': 'iw/2-(iw/zoom/2)',
+#             'y': f'ih/2-(ih/zoom/2)+sin(on/{fps}*0.5)*25',
+#             'd': 1
+#         },
+#         'ken_burns': {
+#             'z': f'min(1+on*{0.3 / (total_frames)},1.3)',
+#             'x': f'iw/2-(iw/zoom/2)+on*{15 / fps}',
+#             'y': f'ih/2-(ih/zoom/2)+on*{10 / fps}',
+#             'd': 1
+#         }
+#     }
+#
+#     if motion_style not in motion_styles:
+#         raise ValueError(f"Unknown motion style: {motion_style}")
+#
+#     params = motion_styles[motion_style]
+#
+#     try:
+#         # Build the ffmpeg pipeline
+#         in_file = (
+#             ffmpeg
+#             .input(str(image_path), loop=1, t=duration, framerate=fps)
+#             .filter('scale', w=int(width * 1.2), h=-1)
+#             .filter('zoompan',
+#                     z=params['z'],
+#                     x=params['x'],
+#                     y=params['y'],
+#                     d=params['d'],
+#                     s=output_size,
+#                     fps=fps)  # Add fps parameter to zoompan
+#         )
+#
+#         # Output with proper settings
+#         out_file = ffmpeg.output(
+#             in_file,
+#             str(video_path),
+#             vcodec='libx264',
+#             pix_fmt='yuv420p',
+#             r=fps,
+#             **{'crf': '23', 'preset': 'medium'}
+#         )
+#
+#         out_file.run(overwrite_output=True, capture_stdout=True, capture_stderr=True)
+#
+#     except ffmpeg.Error as e:
+#         error_message = e.stderr.decode() if e.stderr else str(e)
+#         raise RuntimeError(f"FFmpeg error while animating {image_path}: {error_message}")
+# def animate_image(image_path: Path, video_path: Path, duration: float, motion_style: str = "ken_burns"):
+#     fps = 30
+#     output_size = "1024x1024"
+#     width, height = map(int, output_size.split('x'))
+#     motion_styles = {
+#         'pan_right': {
+#             'z': '1',
+#             'x': 'iw/2-(iw/zoom/2)+t*30',  # Move right slowly
+#             'y': 'ih/2-(ih/zoom/2)',
+#             'd': duration * fps
+#         },
+#         'pan_left': {
+#             'z': '1',
+#             'x': 'iw/2-(iw/zoom/2)-t*30',  # Move left slowly
+#             'y': 'ih/2-(ih/zoom/2)',
+#             'd': duration * fps
+#         },
+#         'pan_down': {
+#             'z': '1',
+#             'x': 'iw/2-(iw/zoom/2)',
+#             'y': 'ih/2-(ih/zoom/2)+t*30',  # Move down slowly
+#             'd': duration * fps
+#         },
+#         'pan_up': {
+#             'z': '1',
+#             'x': 'iw/2-(iw/zoom/2)',
+#             'y': 'ih/2-(ih/zoom/2)-t*30',  # Move up slowly
+#             'd': duration * fps
+#         },
+#         'zoom_in': {
+#             'z': 'min(zoom+0.002,1.5)',  # Zoom from 1x to 1.5x
+#             'x': 'iw/2-(iw/zoom/2)',
+#             'y': 'ih/2-(ih/zoom/2)',
+#             'd': duration * fps
+#         },
+#         'zoom_out': {
+#             'z': 'max(zoom-0.002,1)',  # Zoom from 1.5x to 1x
+#             'x': 'iw/2-(iw/zoom/2)',
+#             'y': 'ih/2-(ih/zoom/2)',
+#             'd': duration * fps
+#         },
+#         'rock_horizontal': {
+#             'z': '1.1',  # Slight zoom for panning room
+#             'x': 'iw/2-(iw/zoom/2)+sin(t*0.5)*25',  # Sine wave motion
+#             'y': 'ih/2-(ih/zoom/2)',
+#             'd': duration * fps
+#         },
+#         'rock_vertical': {
+#             'z': '1.1',
+#             'x': 'iw/2-(iw/zoom/2)',
+#             'y': 'ih/2-(ih/zoom/2)+sin(t*0.5)*25',  # Vertical sine wave
+#             'd': duration * fps
+#         },
+#         'ken_burns': {
+#             'z': 'min(zoom+0.0015,1.3)',
+#             'x': 'iw/2-(iw/zoom/2)+t*15',  # Zoom in while panning
+#             'y': 'ih/2-(ih/zoom/2)+t*10',
+#             'd': duration * fps
+#         }
+#     }
+#     params = motion_styles[motion_style]
+#
+#     in_file = ffmpeg.input(str(image_path), loop=1, t=duration, framerate=fps)
+#     in_file = in_file.filter('scale', w=int(width * 1.2), h=-1)  # Scale up for pan room
+#     in_file = in_file.filter('zoompan',
+#             z=params['z'],
+#             x=params['x'],
+#             y=params['y'],
+#             d=params['d'],
+#             s=output_size)#output size
+#
+#     out_file = in_file.output(str(video_path), vcodec="libx264", pix_fmt="yuv420p")
+#     out_file.run(overwrite_output=True, quiet=True)
+
+
+#
+# import ffmpeg
+#
+#
+# def add_motion_effect(image_path, audio_path, output_path, duration,
+#                       style='pan_right', fps=30, output_size='1920x1080'):
+#     """
+#     Add motion effects to a still image with audio.
+#
+#     Args:
+#         image_path: Path to input image
+#         audio_path: Path to input audio
+#         output_path: Path to output video
+#         duration: Duration in seconds
+#         style: Motion style - options:
+#             - 'pan_right': Slow pan from left to right
+#             - 'pan_left': Slow pan from right to left
+#             - 'pan_down': Slow pan from top to bottom
+#             - 'pan_up': Slow pan from bottom to top
+#             - 'zoom_in': Slow zoom in effect
+#             - 'zoom_out': Slow zoom out effect
+#             - 'rock_horizontal': Gentle side-to-side rocking
+#             - 'rock_vertical': Gentle up-down rocking
+#             - 'ken_burns': Classic zoom + pan combination
+#         fps: Frames per second (default: 30)
+#         output_size: Output resolution (default: '1920x1080')
+#     """
+#
+#     # Parse output size
+#     width, height = map(int, output_size.split('x'))
+#
+#     # Define zoom/pan parameters based on style
+#     zoompan_params = {
+#         'pan_right': {
+#             'z': '1',
+#             'x': 'iw/2-(iw/zoom/2)+t*30',  # Move right slowly
+#             'y': 'ih/2-(ih/zoom/2)',
+#             'd': duration * fps
+#         },
+#         'pan_left': {
+#             'z': '1',
+#             'x': 'iw/2-(iw/zoom/2)-t*30',  # Move left slowly
+#             'y': 'ih/2-(ih/zoom/2)',
+#             'd': duration * fps
+#         },
+#         'pan_down': {
+#             'z': '1',
+#             'x': 'iw/2-(iw/zoom/2)',
+#             'y': 'ih/2-(ih/zoom/2)+t*30',  # Move down slowly
+#             'd': duration * fps
+#         },
+#         'pan_up': {
+#             'z': '1',
+#             'x': 'iw/2-(iw/zoom/2)',
+#             'y': 'ih/2-(ih/zoom/2)-t*30',  # Move up slowly
+#             'd': duration * fps
+#         },
+#         'zoom_in': {
+#             'z': 'min(zoom+0.002,1.5)',  # Zoom from 1x to 1.5x
+#             'x': 'iw/2-(iw/zoom/2)',
+#             'y': 'ih/2-(ih/zoom/2)',
+#             'd': duration * fps
+#         },
+#         'zoom_out': {
+#             'z': 'max(zoom-0.002,1)',  # Zoom from 1.5x to 1x
+#             'x': 'iw/2-(iw/zoom/2)',
+#             'y': 'ih/2-(ih/zoom/2)',
+#             'd': duration * fps
+#         },
+#         'rock_horizontal': {
+#             'z': '1.1',  # Slight zoom for panning room
+#             'x': 'iw/2-(iw/zoom/2)+sin(t*0.5)*25',  # Sine wave motion
+#             'y': 'ih/2-(ih/zoom/2)',
+#             'd': duration * fps
+#         },
+#         'rock_vertical': {
+#             'z': '1.1',
+#             'x': 'iw/2-(iw/zoom/2)',
+#             'y': 'ih/2-(ih/zoom/2)+sin(t*0.5)*25',  # Vertical sine wave
+#             'd': duration * fps
+#         },
+#         'ken_burns': {
+#             'z': 'min(zoom+0.0015,1.3)',
+#             'x': 'iw/2-(iw/zoom/2)+t*15',  # Zoom in while panning
+#             'y': 'ih/2-(ih/zoom/2)+t*10',
+#             'd': duration * fps
+#         }
+#     }
+#
+#     if style not in zoompan_params:
+#         raise ValueError(f"Unknown style: {style}. Available: {list(zoompan_params.keys())}")
+#
+#     params = zoompan_params[style]
+#
+#     # Create video stream with motion effect
+#     video = (
+#         ffmpeg
+#         .input(image_path, loop=1, t=duration)
+#         .filter('scale', w=int(width * 1.2), h=-1)  # Scale up for pan room
+#         .filter('zoompan',
+#                 z=params['z'],
+#                 x=params['x'],
+#                 y=params['y'],
+#                 d=params['d'],
+#                 s=output_size)
+#     )
+#
+#     # Add audio stream
+#     audio = ffmpeg.input(audio_path, t=duration)
+#
+#     # Combine and output
+#     (
+#         ffmpeg
+#         .output(video, audio, output_path,
+#                 **{'c:v': 'libx264', 'crf': 18, 'preset': 'medium',
+#                    'c:a': 'aac', 'b:a': '192k', 'r': fps})
+#         .overwrite_output()
+#         .run(capture_stdout=True, capture_stderr=True)
+#     )
+#
+#
+# # Example usage
+# if __name__ == '__main__':
+#     add_motion_effect(
+#         image_path='scene1.jpg',
+#         audio_path='audio1.mp3',
+#         output_path='output1.mp4',
+#         duration=10,
+#         style='pan_right'  # Change this to any style
+#     )
+========
+
+#
+# def animate_with_motion_effect(image_paths: Path | list[Path], video_path: Path, ideal_image_duration: float,
+#                                last_image_duration: float, motion_pattern: str | list[str] = "ken_burns",
+#                                motion_start_index: int = 0, orientation: str = "portrait"):
+#     if isinstance(image_paths, Path):
+#         image_paths = [image_paths]
+#     num_of_images = len(image_paths)
+#     fps = 30
+#     output_size = "1080x1920" if orientation == "portrait" else "1920x1080"
+#     width, height = map(int, output_size.split("x"))
+#     total_frames = int(ideal_image_duration * fps)
+#     pattern_index = motion_start_index
+#     pattern_length = len(motion_pattern)
+#
+#     motion_styles = {
+#         "pan_right": {
+#             # Slight zoom in so there's room to pan
+#             "z": "1.1",
+#             # Move x from 0 → (iw - iw/zoom) over the clip
+#             "x": f"(iw - iw/zoom) * on / {total_frames}",
+#             # Keep vertically centered
+#             "y": "ih/2 - (ih/zoom/2)",
+#         },
+#         "pan_left": {
+#             "z": "1.1",
+#             # Move x from right → left
+#             "x": f"(iw - iw/zoom) * (1 - on / {total_frames})",
+#             "y": "ih/2 - (ih/zoom/2)",
+#         },
+#         "pan_down": {
+#             "z": "1.1",
+#             "x": "iw/2 - (iw/zoom/2)",
+#             # Move y from top → bottom
+#             "y": f"(ih - ih/zoom) * on / {total_frames}",
+#         },
+#         "pan_up": {
+#             "z": "1.1",
+#             "x": "iw/2 - (iw/zoom/2)",
+#             # Move y from bottom → top
+#             "y": f"(ih - ih/zoom) * (1 - on / {total_frames})",
+#         },
+#         "zoom_in": {
+#             "z": f"min(1+on/{total_frames}*0.2,1.2)",
+#             "x": "iw/2-(iw/zoom/2)",
+#             "y": "ih/2-(ih/zoom/2)",
+#         },
+#         "zoom_out": {
+#             "z": f"max(1.2-on/{total_frames}*0.2,1)",
+#             "x": "iw/2-(iw/zoom/2)",
+#             "y": "ih/2-(ih/zoom/2)",
+#         },
+#         "rock_horizontal": {
+#             "z": "1.05",
+#             # super gentle sway: period ~ 4s, amplitude 15px
+#             "x": f"iw/2-(iw/zoom/2)+sin(on*PI/{fps}*0.5)*15",
+#             "y": "ih/2-(ih/zoom/2)",
+#         },
+#         "rock_vertical": {
+#             "z": "1.05",
+#             "x": "iw/2-(iw/zoom/2)",
+#             "y": f"ih/2-(ih/zoom/2)+sin(on*PI/{fps}*0.5)*15",
+#         },
+#         "ken_burns": {
+#             "z": f"min(1+on/{total_frames}*0.1,1.1)",
+#             "x": f"iw/2-(iw/zoom/2)+on*{30 / fps}",
+#             "y": f"ih/2-(ih/zoom/2)+on*{30 / fps}",  # fixed ih here
+#         },
+#     }
+#
+#
+#     try:
+#         sub_clips = []
+#         for index, image_path in enumerate(image_paths):
+#             new_clip = ffmpeg.input(str(image_path),
+#                                     loop=1,
+#
+#                                         t=ideal_image_duration if image_path != image_paths[-1] else last_image_duration)
+#
+#             new_clip = new_clip.filter("zoompan",
+#                             z=motion_styles[motion_pattern[pattern_index % pattern_length]]["z"],
+#                             x=motion_styles[motion_pattern[pattern_index % pattern_length]]["x"],
+#                             y=motion_styles[motion_pattern[pattern_index % pattern_length]]["y"],
+#                             d=1,
+#                             fps=fps)
+#             pattern_index += 1
+#             sub_clips.append(new_clip)
+#
+#         animated_video_stream = ffmpeg.concat(*sub_clips, v=1, a=0).node[0]
+#         outfile = ffmpeg.output(animated_video_stream, str(video_path), vcodec="libx264", pix_fmt="yuv420p")
+#         outfile.run()
+#
+#     except ffmpeg.Error as e:
+#         error_message = e.stderr.decode() if e.stderr else str(e)
+#         raise RuntimeError(f"FFmpeg error while animating {image_paths}: {error_message}")
+#
+
+
+
+
+
+
+
+

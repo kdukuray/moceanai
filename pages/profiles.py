@@ -77,7 +77,8 @@ if profile_to_modify is not None:
     updated_name = st.text_input(label="Name", key="updated_name", placeholder=profile_obj.name)
     updated_one_sentence_summary = st.text_input(label="One Sentence", key="updated_one_sentence_summary", placeholder=profile_obj.one_sentence_summary)
     updated_detailed_description = st.text_area(label="Detailed Description", key="updated_detailed_description", placeholder=profile_obj.detailed_description)
-    updated_target_audience = st.text_input(label="Target Audience", key="updated_target_audience", placeholder=profile_obj.target_audience)
+    updated_target_audience = st.text_input(label="Target Audience", key="updated_target_audience", placeholder="")
+    st.markdown(f"**_Current Target Audience_**: {profile_obj.target_audience}")
     updated_brand_color = st.text_input(label="Brand Color", key="updated_brand_color", placeholder=profile_obj.brand_color)
     updated_slogan = st.text_input(label="Slogan", key="updated_slogan", placeholder=profile_obj.slogan)
 

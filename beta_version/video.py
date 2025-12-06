@@ -11,7 +11,7 @@ import asyncio
 import moviepy as mvpy
 
 # local modules
-from system_prompts import (
+from beta_version.system_prompts import (
     one_shot_script_generation_system_prompt,
     short_form_video_goal_generation_system_prompt,
     short_form_video_hook_generation_system_prompt,
@@ -22,13 +22,13 @@ from system_prompts import (
     eleven_v3_audio_enhancer_system_prompt,
     eleven_v2_audio_enhancer_system_prompt, video_caption_generator_system_prompt
 )
-from ai_clients.openai_client import openai_semaphore
-from ai_clients.gemini_client import gemini_semaphore
-from ai_clients.elevenlabs_client import elevenlabs_semaphore, VoiceActor, elevenlabs_client
-from ai_models import ImageModel, VoiceModel, ModelProvider
-from clip import Clip
+from beta_version.ai_clients.openai_client import openai_semaphore
+from beta_version.ai_clients import gemini_semaphore
+from beta_version.ai_clients import elevenlabs_semaphore, VoiceActor, elevenlabs_client
+from beta_version.ai_models import ImageModel, VoiceModel, ModelProvider
+from beta_version.clip import Clip
 from errors import MissingDataError, FailedGenerationError, FailedParsingError
-from utils import extract_json_from_fence, MediaTone, MediaPurpose, MediaPlatform, AspectRatio, ImageStyle, invoke_llm
+from beta_version.old_utils import extract_json_from_fence, MediaTone, MediaPurpose, MediaPlatform, AspectRatio, ImageStyle, invoke_llm
 
 # Makes sure the directories needed to store permanent and temporary media exists
 required_directories = ["final_videos", "base_images", "animated_videos", "voice_over_audios", "clip_video_with_audios"]

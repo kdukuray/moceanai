@@ -4,14 +4,18 @@
 __pycache__
 
 # Media Files
-animated_videos/*
-base_images/*
-final_videos/*
-video_with_audio_clips/*
-voice_over_audios/*
+beta_version/animated_videos/*
+beta_version/base_images/*
+beta_version/final_videos/*
+beta_version/video_with_audio_clips/*
+beta_version/voice_over_audios/*
 
 # Env files
 .env
 .venv
-sandbox_for_testing
-sandbox_for_testing/*
+beta_version/sandbox_for_testing
+beta_version/sandbox_for_testing/*
+
+*.mp4
+*.mp3
+*jpg

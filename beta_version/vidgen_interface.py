@@ -2,11 +2,11 @@ import streamlit as st
 
 from crud import get_all_profiles
 from models import Profile
-from utils import MediaPurpose, MediaTone, MediaPlatform, AspectRatio, ImageStyle
-from ai_models import ImageModel, VoiceModel, ModelProvider
+from beta_version.old_utils import MediaPurpose, MediaTone, MediaPlatform, AspectRatio, ImageStyle
+from beta_version.ai_models import ImageModel, VoiceModel, ModelProvider
 from video import Video
 import asyncio
-from ai_clients.elevenlabs_client import VoiceActor
+from beta_version.ai_clients import VoiceActor
 
 
 voice_actor_options = {
@@ -328,7 +328,7 @@ script_generation_method = st.selectbox(label="Script Generation Method", option
 if st.button("Create Video BluePrint"):
     create_video()
 
-if st.session_state.video.topic:
+if st.session_state.video.topics:
     if st.button("Generate Video"):
         with st.spinner("Generating Video..."):
             asyncio.run(st.session_state.video.generate_video(audio_generation_method=audio_generation_method,
