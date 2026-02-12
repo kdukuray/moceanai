@@ -17,7 +17,9 @@ beta_version/sandbox_for_testing
 beta_version/sandbox_for_testing/*
 # files for local dev
 z_*.*
+z_video_ideas/
 *sandbox*.*
+scrap
 
 # media files
 *.mp4
