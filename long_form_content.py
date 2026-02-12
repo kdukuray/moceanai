@@ -10,7 +10,8 @@ import asyncio
 from datetime import datetime
 # third party packages
 import ffmpeg
-from langchain.messages import AIMessage, HumanMessage
+from langchain.messages import AIMessage, HumanMessage, SystemMessage
+
 from langgraph.graph import StateGraph
 from langgraph.constants import START, END
 from pydantic import BaseModel, Field
@@ -19,68 +20,82 @@ from elevenlabs import ElevenLabs
 # my modules
 from system_prompts import (
     short_form_video_goal_generation_system_prompt,
-    short_form_video_hook_generation_system_prompt,
     short_form_script_generation_system_prompt,
     script_enhancer_elevenlabs_v3_system_prompt, script_segmentation_system_prompt,
-    image_descriptions_generator_system_prompt, generate_segment_image_descriptions_system_prompt
+    image_descriptions_generator_system_prompt, generate_segment_image_descriptions_system_prompt,
+    long_form_video_structure_generation_system_prompt, long_form_video_topic_section_script_generation_system_prompt,
+    long_form_video_section_script_segmenter_system_prompt
 )
-from utils import generate_image as generate_single_image, animate_with_motion_effect
+from utils import animate_with_motion_effect
 from utils import model_providers, image_models, image_styles, voice_model_versions, voice_models, voice_actors
-from utils import get_video_duration
-
+from utils import get_video_duration, generate_image, pseudo_generate_image
+from concurrent.futures import ProcessPoolExecutor
+NUM_WORKERS = os.cpu_count()
 # AI Models
-# ai_model = init_chat_model(model_provider="google-genai", model="gemini-2.5-pro")
-ai_model = init_chat_model(model_provider="openai", model="gpt-5.1")
-
+ai_model = init_chat_model(model_provider="google-genai", model="gemini-2.5-pro")
+# ai_model = init_chat_model(model_provider="openai", model="gpt-5.1")
 ai_voice_model = ElevenLabs(api_key=os.getenv("ELEVEN_LABS_API_KEY"))
 
-
 # Typed Dictionaries
-class ImageDescription(BaseModel):
-    description: str = Field(..., description="The description of an image for a clip in the video.")
-    uses_logo: bool = Field(..., description="A boolean that defines whether or not the image uses the company logo.")
 
 
 class GoalContainer(BaseModel):
     goal: str = Field(..., description="The goal of the video to be produced.")
 
+class SectionStructure(BaseModel):
+    section_name: str = Field(..., description="A descriptive name for the section.")
+    section_purpose: str = Field(..., description="The purpose of the section in paragraph format explaining the strategic function of it.")
+    section_directives: list[str] = Field(..., description="A list of directives that define the section's purpose.")
+    section_talking_points: list[list] = Field(..., description="A list of talking points that will be discussed within this section.")
 
-class IntroContainer(BaseModel):
-    intro: str = Field(..., description="The intro of the video to be produced.")
+class SectionsStructureContainer(BaseModel):
+    sections_structure_list: list[SectionStructure] = Field(..., description="A list of section structures for the video.")
 
+class SectionScriptContainer(BaseModel):
+    section_script: str = Field(..., description="The complete narration (script) for a section of the video as a single string.")
 
-class ScriptContainer(BaseModel):
-    script: str = Field(..., description="The script for the video to be produced.")
+class SectionScriptSegmentItem(BaseModel):
+    section_script_segment: str = Field(..., description="A segment of a section script.")
 
+class SectionScriptSegmentedContainer(BaseModel):
+    section_script_segmented_as_list: list[SectionScriptSegmentItem] = Field(..., description="A list of segments for a section's script.")
 
-class EnhancedScriptContainer(BaseModel):
-    enhanced_script: str = Field(..., description="The enhanced script to be used for audio generation.")
-
-
-class ScriptSegment(BaseModel):
-    script_segment: str = Field(..., description="A segment from the script for the video.")
-    enhanced_script_segment: str = Field(...,
-                                         description="An audio enhanced version of the corresponding script segment.")
-
-
-class ScriptListContainer(BaseModel):
-    script_list: list[ScriptSegment]
-
-
-class ImageDescriptionsContainer(BaseModel):
-    image_descriptions: list[ImageDescription] = Field(..., description="A list of image descriptions.")
-
+class ImageDescription(BaseModel):
+    description: str = Field(..., description="The description of an image for a clip in the video.")
+    uses_logo: bool = Field(..., description="A boolean that defines whether or not the image uses the company logo.")
 
 class SegmentImageDescriptionsContainer(BaseModel):
     segment_image_descriptions: list[ImageDescription] = Field(..., description="A list of image descriptions.")
 
 
+
+# -----------------------------------------------------------
+
+
+class ScriptContainer(BaseModel):
+    script: str = Field(..., description="The entire script of the video (all section scripts concatenated in a single string).")
+
+class EnhancedScriptContainer(BaseModel):
+    enhanced_script: str = Field(..., description="The enhanced version of the video's script to be used for audio generation."
+                                                  "Simply a concatenation of all section's enhanced scripts.")
+
+class SectionScript(BaseModel):
+    section_script: str = Field(..., description="The section's script.")
+    enhanced_section_script: str = Field(...,
+                                         description="An audio enhanced version of the corresponding section's script.")
+
+class ImageDescriptionsContainer(BaseModel):
+    image_descriptions: list[ImageDescription] = Field(..., description="A list of image descriptions. Each container "
+                                                                        "holds the image descriptions for a single segment within a section.")
+
+
+
+
 class TalkingPoint(BaseModel):
     content: str = Field(..., description="The content of the talking point.")
 
-class TopicsContainer(BaseModel):
-    content: str = Field(..., description="A description of the topic.")
-    talking_points: list[TalkingPoint] = Field(..., description="A list of talking points that will be discussed under this topic.")
+
+
 
 # Video Creator Agent Definition
 class AgentState(BaseModel):
@@ -131,10 +146,12 @@ class AgentState(BaseModel):
     video_paths: Optional[list[Path]] = Field(None, description="A list of paths to videos generated for the video.")
     image_descriptions_container_for_all_segments: Optional[list[dict[str, list[ImageDescription]]]] = Field(None,
                                                                                                              description="A list of dictionaries for each script segment, each dictionary has a key whose value is a list of ImageDescription objects.")
+    all_segments_image_descriptions_container_for_all_segments: Optional[list[list[dict[str, list[ImageDescription]]]]] = Field(None,)
     image_paths_for_all_segments: Optional[list[list[Path]]] = Field(None,
                                                                      description="A list of lists of paths to images. Each segment corresponds to a list image paths")
     last_image_durations: Optional[list[float]] = Field(None,
                                                         description="The duration of the last image in each segment.")
+    all_segments_last_image_durations: Optional[list[list[float]]] = Field(None,)
     # states used for debugging purposes
     debug_mode: bool = Field(False, description="A boolean that defines whether debugging should be enabled.")
     script_segment_begin_and_end_times: list[tuple[float, float]] = Field(None,
@@ -148,7 +165,28 @@ class AgentState(BaseModel):
     add_end_buffer: bool = Field(True,
                                  description="A boolean that defines whether to add an end buffer to the generated video.")
 
+    sections_structure: list = Field(None, description="A list of structured sections that make up the video's overall structure.")
+    section_scripts: list[str] = Field(None, description="A list of strings that are scripts for the video sections.")
+    section_script_as_list: list[dict[str, str]] = Field(None, description="A list of dictionaries containing segments for the script of a single segment.")
 
+    #
+    sections_structure_list: list[SectionStructure] = Field(None, description="A list of section structures for the video.")
+    all_sections_scripts_as_lists: list[list[SectionScriptSegmentItem]] = Field(None,
+                                                                                description="A list of lists, each inner list containing section script segment items, with one key, `section script segment` that contains the raw script for that segment of the section's script.")
+    all_sections_generated_audio_file_paths: list[Path] = Field(None, description="The file path for audio generated for all segments.")
+    all_sections_generated_audio_characters: list[list[str]] | None = Field(None, description="The segments generated audio characters.")
+    all_sections_generated_audio_character_start_times: list[list[float]] | None = Field(None, description="The start times for every segment's audio.")
+    all_section_generated_audio_character_end_times: list[list[float]] | None = Field(None, description="The end times for every segment's audio.")
+    all_sections_scripts_durations: list[list[float]] | None = Field(None, description="The durations for every section's scripts script segments.")
+    all_sections_scripts_begin_and_end_times:list[list[tuple[float, float]]] | None = Field(None, description="The start and end times for every sections's script segments.")
+    # all_sections_image_descriptions_container_for_all_segments is a list, of list or SegmentImageDescriptionsContainer
+    # remember that each SegmentImageDescriptionsContainer itself contains a list of ImageDescriptions in its segment_image_descriptions attribute
+    all_sections_image_descriptions_container_for_all_segments: list[list[SegmentImageDescriptionsContainer]] | None = Field(None, description="A list of lists of SegmentImageDescriptionsContainer. One otter list per section, one inner list for each segment in the segment")
+    all_sections_segments_last_image_durations: list[list[float]] | None = Field(None, description="The durations for every section's segments' last images.")
+    all_segments_image_paths_for_all_sections: list[list[list[Path]]] | None = Field(None, description="")
+    all_sections_final_video_paths: list[Path] | None = Field(None, description="")
+
+# semi done
 def resolve_agent_state_values(state: AgentState) -> dict[str, str]:
     """
     This function maps user-friendly names from the AgentState,
@@ -170,11 +208,12 @@ def resolve_agent_state_values(state: AgentState) -> dict[str, str]:
         "american_male_story_teller": "uju3wxzG5OhpWcoi3SMy",
         "american_female_narrator": "yj30vwTGJxSHezdAGsv9",
         "american_female_media_influencer": "kPzsL2i3teMYv0FxEYQ6",
-        "american_female_media_influencer_2": "S9NKLs1GeSTKzXd9D0Lf"
+        "american_female_media_influencer_2": "S9NKLs1GeSTKzXd9D0Lf",
+        "new_male_convo": "1SM7GgM6IMuvQlz2BwM3"
     }
     return {"voice_actor_id": voice_actor_ids_dict.get(state.voice_actor, "")}
 
-
+# semi done
 def generate_goal(state: AgentState) -> dict[str, str]:
     """
     This function generates the main goal of the video using the target audience, topic and purpose of the video.
@@ -199,52 +238,34 @@ def generate_goal(state: AgentState) -> dict[str, str]:
     goal_container: BaseModel = model_for_goal.invoke(messages)
     return {"goal": goal_container.goal}
 
-def generate_topics(state: AgentState) -> dict[str, str]:
+# semi done
+def generate_structure(state: AgentState) -> dict[str, list]:
     """
-    """
-    if state.debug_mode:
-        print("Generating talking points...")
-    model_for_topics = ai_model.with_structured_output(TopicsContainer)
-    payload = json.dumps({
-        "topic": state.topic,
-        "purpose": state.purpose,
-        "target_audience": state.target_audience,
-    })
-    system_message = AIMessage(content=short_form_video_goal_generation_system_prompt)
-    user_message = HumanMessage(content=payload)
-    messages = [system_message, user_message]
-    goal_container: BaseModel = model_for_topics.invoke(messages)
-    return {"goal": goal_container.goal}
-
-
-def generate_intro(state: AgentState) -> dict[str, str]:
-    """
-    This function generates the intro of the video using the information on the video object.
-    The intro is the opener to the video and the most important part of long form content.
-    It returns a dictionary with a single `intro` key.
-    Parameters:
-        state (AgentState): The current state of the agent.
-    Returns:
-        dict[str, str]: Dictionary containing the hook for the video
+    This function generates the structure of the video using the topic, purpose, target audience, tone and goal.
+    structure divides the video in sections. Each section has topic_name; descriptive name for the section,
+    topic_purpose; brief summary of what the section aims to achieve,
     """
     if state.debug_mode:
-        print("Generating intro...")
-    model_for_intro = ai_model.with_structured_output(IntroContainer)
+        print("Generating Video Structure ...")
+    model_for_sections_structure = ai_model.with_structured_output(SectionsStructureContainer)
     payload = json.dumps({
         "topic": state.topic,
         "purpose": state.purpose,
         "target_audience": state.target_audience,
         "tone": state.tone,
-        "platform": state.platform,
+        "goal": state.goal,
+        "max_sections": 3 # delete later
     })
-    system_message = AIMessage(content=short_form_video_hook_generation_system_prompt)
+    system_message = AIMessage(content=long_form_video_structure_generation_system_prompt)
     user_message = HumanMessage(content=payload)
     messages = [system_message, user_message]
-    hook_container: BaseModel = model_for_intro.invoke(messages)
-    return {"hook": hook_container.hook}
+    sections_structure_container: BaseModel = model_for_sections_structure.invoke(messages)
+    return {"sections_structure_list": [section_structure for section_structure in sections_structure_container.sections_structure_list]}
 
 
-def generate_script(state: AgentState) -> dict[str, str]:
+
+# semi done
+def generate_section_scripts(state: AgentState) -> dict[str, str]:
     """
         This function generates the script of the video using the information on the video object.
         It generates the script for the entire video in one shot.
@@ -256,27 +277,37 @@ def generate_script(state: AgentState) -> dict[str, str]:
     """
     if state.debug_mode:
         print("Generating script...")
-    model_for_script = ai_model.with_structured_output(ScriptContainer)
-    payload = json.dumps({
-        "topic": state.topic,
-        "goal": state.goal,
-        "hook": state.hook,
-        "purpose": state.purpose,
-        "target_audience": state.target_audience,
-        "tone": state.tone,
-        "additional_requests": state.additional_instructions,
-        "platform": "Instagram and Tiktok",
-        "duration_seconds": state.duration_seconds,
-        "style_reference": state.style_reference,
-    })
+    model_for_section_script = ai_model.with_structured_output(SectionScriptContainer)
+    cumulative_script = ""
+    section_scripts = []
+    num_of_sections = len(state.sections_structure_list) + 1
+    for index, section_structure in enumerate(state.sections_structure_list):
+        print(f"Generating script for section {index+1} of {num_of_sections}...")
+        payload = json.dumps({
+            "topic": state.topic,
+            "purpose": state.purpose,
+            "target_audience": state.target_audience,
+            "tone": state.tone,
+            "additional_requests": state.additional_instructions,
+            "style_reference": state.style_reference,
+            "cumulative_script": cumulative_script,
+            "section_information": {
+                "section_name": section_structure.section_name,
+                "section_purpose": section_structure.section_purpose,
+                "section_directives": section_structure.section_directives,
+                "section_talking_points": section_structure.section_talking_points,
+            }
+        })
+        system_message = SystemMessage(content=long_form_video_topic_section_script_generation_system_prompt)
+        user_message = HumanMessage(content=payload)
+        messages = [system_message, user_message]
+        section_script_container = model_for_section_script.invoke(messages)
+        cumulative_script += section_script_container.section_script
+        section_scripts.append(section_script_container.section_script)
 
-    system_message = AIMessage(content=short_form_script_generation_system_prompt)
-    user_message = HumanMessage(content=payload)
-    messages = [system_message, user_message]
-    script_container: BaseModel = model_for_script.invoke(messages)
-    return {"script": script_container.model_dump().get("script", "")}
+    return {"script": cumulative_script, "section_scripts": section_scripts}
 
-
+# skipped
 def enhance_script_for_audio_generation(state: AgentState) -> dict[str, str]:
     """
         This function enhances the script for the audio generation of the video. it does by adding SSML(speech synthesis
@@ -293,14 +324,14 @@ def enhance_script_for_audio_generation(state: AgentState) -> dict[str, str]:
         "script": state.script,
     })
 
-    system_message = AIMessage(content=script_enhancer_elevenlabs_v3_system_prompt)
+    system_message = SystemMessage(content=script_enhancer_elevenlabs_v3_system_prompt)
     user_message = HumanMessage(content=payload)
     messages = [system_message, user_message]
     enhanced_script_container: BaseModel = model_for_enhanced_script.invoke(messages)
     return {"enhanced_script": enhanced_script_container.model_dump().get("enhanced_script", "")}
 
-
-def segment_script(state: AgentState) -> dict[str, list[dict[str, str]]]:
+# semi done
+def segment_section_scripts(state: AgentState) -> dict[str, list[list[SectionScriptSegmentItem]]]:
     """
     This function takes the  script and the version of the script that was enhanced for audio generation, splits
     them into cohesive and logically separated segments. It returns a list of dictionaries, where each contains segments
@@ -312,26 +343,49 @@ def segment_script(state: AgentState) -> dict[str, list[dict[str, str]]]:
         dict[str, list[dict[str, str]]]: Dictionary containing the segmented script for audio generation.
     """
     if state.debug_mode:
-        print("Segmenting script...")
-    model_for_script_list = ai_model.with_structured_output(ScriptListContainer)
-    payload = json.dumps({
-        "script": state.script,
-        "enhanced_script": state.enhanced_script,
-    })
-    system_message = AIMessage(content=script_segmentation_system_prompt)
-    user_message = HumanMessage(content=payload)
-    messages = [system_message, user_message]
-    script_list_container: BaseModel = model_for_script_list.invoke(messages)
-    # print(script_list_container)
-    # print(script_list_container.script_list[0])
-    return {"script_list": script_list_container.model_dump().get("script_list", [])}
+        print("Segmenting section_script scripts")
+    # This is a list of lists
+    # each inner list is the segmented version of a single section_script's script
+    # Each instance of the segments is a dictionary
+    all_sections_scripts_as_lists: list[list[SectionScriptSegmentItem]] = []
+    for index, section_script in enumerate(state.section_scripts):
+        print(f"Segmenting script for section_script: index:{index}, script:{section_script}")
+        model_for_segmenting_script_segments = ai_model.with_structured_output(SectionScriptSegmentedContainer)
+        payload = json.dumps({
+            "section_script": section_script
+        })
+        # SectionScriptSegmentItem
+        system_message = SystemMessage(content=long_form_video_section_script_segmenter_system_prompt)
+        user_message = HumanMessage(content=payload)
+        messages = [system_message, user_message]
+        section_script_segmented_container = model_for_segmenting_script_segments.invoke(messages)
+        # section_script_segmented_container is a class with a key section_script_segmented_as_list`
+        # section_script_segmented_as_list is a list of `section_script_segment_item`
+        # each `section_script_segment_item` has one key `section_script_segment` that contain actual segment text
+        all_sections_scripts_as_lists.append([section_script_segment_item for section_script_segment_item in section_script_segmented_container.section_script_segmented_as_list])
+
+    return {"all_sections_scripts_as_lists": all_sections_scripts_as_lists}
 
 
-def generate_audio(state: AgentState) -> dict[str, Path]:
+    # model_for_script_list = ai_model.with_structured_output(ScriptListContainer)
+    # payload = json.dumps({
+    #     "script": state.script,
+    #     "enhanced_script": state.enhanced_script,
+    # })
+    # system_message = AIMessage(content=script_segmentation_system_prompt)
+    # user_message = HumanMessage(content=payload)
+    # messages = [system_message, user_message]
+    # script_list_container: BaseModel = model_for_script_list.invoke(messages)
+    # # print(script_list_container)
+    # # print(script_list_container.script_list[0])
+    # return {"script_segment_list": script_list_container.model_dump().get("script_segment_list", [])}
+
+# semi done
+def generate_section_audios(state: AgentState) -> dict[str, list[str]]:
     """
     This function generates the audio using the script or enhanced script depending on the agent state.
     The generated video is saved and the path to it is stored in the agent state's generated_audio_path attribute along
-    with other metadata related to the generated audio.
+    with other metadata related to the genefrated audio.
     Parameters:
         state (AgentState): The current state of the agent.
     Returns:
@@ -340,28 +394,38 @@ def generate_audio(state: AgentState) -> dict[str, Path]:
     """
     if state.debug_mode:
         print("Generating audio...")
-    generated_audio = ai_voice_model.text_to_speech.convert_with_timestamps(
-        text=state.enhanced_script if state.enhance_script_for_audio_generation else state.script,
-        model_id=state.voice_model_version,
-        voice_id=state.voice_actor_id,
-        output_format="mp3_44100_128",
-    )
+    all_sections_generated_audio_file_paths = []
+    all_sections_generated_audio_characters = []
+    all_sections_generated_audio_character_start_times = []
+    all_sections_generated_audio_character_end_times = []
+    for section_script in state.section_scripts:
+        section_generated_audio = ai_voice_model.text_to_speech.convert_with_timestamps(
+            text=section_script,
+            model_id=state.voice_model_version,
+            voice_id=state.voice_actor_id,
+            output_format="mp3_44100_128",
+        )
 
-    generated_audio_file_path = Path(os.getcwd()) / "generated_audio_files" / f"{uuid.uuid4().hex}.mp3"
-    generated_audio_file_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(generated_audio_file_path, "wb") as generated_audio_file:
-        generated_audio_file.write(base64.b64decode(generated_audio.audio_base_64))
+        section_generated_audio_file_path = Path(os.getcwd()) / "generated_audio_files" / f"{uuid.uuid4().hex}.mp3"
+        section_generated_audio_file_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(section_generated_audio_file_path, "wb") as generated_audio_file:
+            generated_audio_file.write(base64.b64decode(section_generated_audio.audio_base_64))
 
-    payload = {
-        "generated_audio_file_path": generated_audio_file_path,
-        "generated_audio_characters": generated_audio.normalized_alignment.characters,
-        "generated_audio_character_start_times": generated_audio.normalized_alignment.character_start_times_seconds,
-        "generated_audio_character_end_times": generated_audio.normalized_alignment.character_end_times_seconds,
+        all_sections_generated_audio_file_paths.append(section_generated_audio_file_path)
+        all_sections_generated_audio_characters.append(section_generated_audio.normalized_alignment.characters)
+        all_sections_generated_audio_character_start_times.append(section_generated_audio.normalized_alignment.character_start_times_seconds)
+        all_sections_generated_audio_character_end_times.append(section_generated_audio.normalized_alignment.character_end_times_seconds)
+
+    updated_state = {
+        "all_sections_generated_audio_file_paths": all_sections_generated_audio_file_paths,
+        "all_sections_generated_audio_characters": all_sections_generated_audio_characters,
+        "all_sections_generated_audio_character_start_times": all_sections_generated_audio_character_start_times,
+        "all_sections_generated_audio_character_end_times": all_sections_generated_audio_character_end_times,
     }
-    return payload
+    return updated_state
 
-
-def compute_script_segment_timings(state: AgentState) -> dict[str, list[float]]:
+# semi done
+def compute_section_script_timings(state: AgentState) -> dict[str, list[float]]:
     """
     This function computes precise timing information for each script segment used as voice-over
     for video clips. This function aligns every script segment to the internally
@@ -377,49 +441,70 @@ def compute_script_segment_timings(state: AgentState) -> dict[str, list[float]]:
     """
     if state.debug_mode:
         print("Calculating script segment timings...")
-    script_segment_begin_and_end_times = []
-    script_segment_durations = []
-    # added exessive comments for fine-grained tracing during development and debugging
+    # This is a list of list, one list per section
+    # Each list contains tuples, one tuple per segment in the section
+    # The first element in the tuple is the start time and the second element is the end time
+    all_sections_scripts_begin_and_end_times = []
+    # This is a list of lists, one per section
+    # Each list contains floats, the floats in the list represent the
+    # durations of the segments in the section.
+    all_sections_scripts_durations = []
 
-    # start_time_index for each script_segment, refers to corresponding index of the script_segment's first character in
-    # generated audio's character array. the end_time_index for each script_segment, refers to corresponding index of
-    # the script_segment's last character in generated audio's character array.
+    # each section_script_segmented_as_list is a list of SectionScriptSegmentItem (which have one key; `section_script_segment`) for a single section
+    # section_index is used to index into the section we are on in the iteration
+    for section_index, section_script_segmented_as_list in enumerate(state.all_sections_scripts_as_lists):
+        section_script_begin_and_end_times = []
+        # a list of floats, each float represents the duration of an image frame in the section_script_segment
+        # remember, a single segment.......
+        section_script_durations = []
+        # added exessive comments for fine-grained tracing during development and debugging
+        # start_time_index for each section_script_segment, refers to corresponding index of the section_script_segment's first character in
+        # generated audio's character array. the end_time_index for each section_script_segment, refers to corresponding index of
+        # the section_script_segment's last character in generated audio's character array.
+        # the current index is 0. This is the index of the three parallel arrays
+        current_index = 0
+        # loop through all the script segments
+        # section_script_segment_index is used to iterate through a sectino's script segments
+        for section_script_segment_index, section_script_segment_item in enumerate(section_script_segmented_as_list):
+            # we set the start time index of the parallel arrays to the current index,
+            # We add one to accommodate for spaces after sentences if we are not on the first script segment
+            start_time_index = current_index if current_index == 0 else current_index + 1
+            # start_time_index = current_index
+            # get the character length of the script segment's script
+            # the 'current script' may be  referring to the raw script or enhanced_script, depending on which mode of audio
+            # generation was used
+            section_script_segment_length = len(section_script_segment_item.section_script_segment)
+            # because of zero indexing, the last character in the section_script_segment's script correspond to the following
+            # index in the overall generated audio's character list
+            end_time_index = start_time_index + section_script_segment_length - 1
 
-    # the current index is 0. This is the index of the three parallel arrays
-    current_index = 0
-    # loop through all the script segment
-    for index, script_segment in enumerate(state.script_list):
-        # we set the start time index of the parallel arrays to the current index,
-        # We add one to accommodate for spaces after sentences if we are not on the first script segment
-        start_time_index = current_index if current_index == 0 else current_index + 1
-        # start_time_index = current_index
-        # get the character length of the script segment's script
-        # the 'current script' may be  referring to the raw script or enhanced_script, depending on which mode of audio
-        # generation was used
-        script_segment_length = len(script_segment["enhanced_script_segment"]) \
-            if state.enhance_script_for_audio_generation else len(script_segment["script_segment"])
-        # because of zero indexing, the last character in the script_segment's script correspond to the following
-        # index in the overall generated audio's character list
-        end_time_index = start_time_index + script_segment_length - 1
+            # actual start and end times for each script segment
+            # actual_start_time = state.generated_audio_character_start_times[start_time_index] # error
+            # actual_end_time = state.generated_audio_character_start_times[end_time_index] error
+            actual_start_time = state.all_sections_generated_audio_character_start_times[section_index][start_time_index]
+            actual_end_time = state.all_sections_generated_audio_character_start_times[section_index][end_time_index]
 
-        # actual start and end times for each script segment
-        actual_start_time = state.generated_audio_character_start_times[start_time_index]
-        actual_end_time = state.generated_audio_character_start_times[end_time_index]
 
-        # there may be a gap between when a script segment ends and when the other begins, to accommodate this, we add
-        # the difference in time to the end time of the former script segment
-        actual_end_time += (state.generated_audio_character_start_times[end_time_index + 2] -
-                            state.generated_audio_character_start_times[end_time_index]) \
-            if end_time_index + 2 < len(state.generated_audio_character_start_times) \
-            else 0
-        script_segment_duration = actual_end_time - actual_start_time
-        script_segment_durations.append(script_segment_duration)
-        current_index = end_time_index + 1 if end_time_index + 1 < len(
-            state.generated_audio_character_start_times) else 0
-        script_segment_begin_and_end_times.append((actual_start_time, actual_end_time))
+            # there may be a gap between when a script segment ends and when the other begins, to accommodate this, we add
+            # the difference in time to the end time of the former script segment
+            actual_end_time += (state.all_sections_generated_audio_character_start_times[section_index][end_time_index + 2] -
+                                state.all_sections_generated_audio_character_start_times[section_index][end_time_index]) \
+                if end_time_index + 2 < len(state.all_sections_generated_audio_character_start_times[section_index]) \
+                else 0
+            section_script_segment_duration = actual_end_time - actual_start_time
+            # segment_script_segment_duration = actual_end_time - actual_start_time
+            section_script_durations.append(section_script_segment_duration)
+            current_index = end_time_index + 1 if end_time_index + 1 < len(
+                state.all_sections_generated_audio_character_start_times[section_index]) else 0
+            section_script_begin_and_end_times.append((actual_start_time, actual_end_time))
 
-    return {"script_segment_durations": script_segment_durations,
-            "script_segment_begin_and_end_times": script_segment_begin_and_end_times}
+        all_sections_scripts_durations.append(section_script_durations)
+        all_sections_scripts_begin_and_end_times.append(section_script_begin_and_end_times)
+
+    # all_sections_scripts_durations is a list[list[floats]]
+    # all_sections_scripts_begin_and_end_times is list[list[tuple[float, float]]]
+    return {"all_sections_scripts_durations": all_sections_scripts_durations,
+            "all_sections_scripts_begin_and_end_times": all_sections_scripts_begin_and_end_times}
 
 
 def compute_length_and_num_of_images_per_segment(segment_duration_seconds: float, ideal_image_duration,
@@ -479,99 +564,246 @@ def compute_length_and_num_of_images_per_segment(segment_duration_seconds: float
 
     return int(images_count), last_sub_clip_duration
 
-
+# semi done
 async def generate_segments_image_descriptions(state: AgentState) -> dict[str, list]:
     """"""
     if state.debug_mode:
-        print("Generating segment image descriptions...")
+        print("Generating section segment image descriptions...")
+        # each section should have a list of lists, each inner list contains the image descriptions for a segment in the section
+    all_sections_image_descriptions_container_for_all_segments = []
+    all_sections_segments_last_image_durations = []
+
     model_for_segment_image_descriptions = ai_model.with_structured_output(SegmentImageDescriptionsContainer)
-    tasks = []
-    last_image_durations: list[float] = []
-    async with asyncio.TaskGroup() as t:
-        # for each segment, get image descriptions and last clip durations
-        for index in range(len(state.script_list)):
-            # calculate num of clips in the segment and length of the last image in it
-            num_of_images_per_segment, last_image_duration = compute_length_and_num_of_images_per_segment(
-                state.script_segment_durations[index],
-                state.ideal_image_duration,
-                state.minimum_acceptable_image_duration)
-            # for each segment, save the last image duration
-            last_image_durations.append(last_image_duration)
 
-            # Construct payload to create image descriptions for a segment
-            payload = json.dumps({
-                "script_segment": state.script_list[index]["script_segment"],
-                "full_script": state.script,
-                "additional_image_requests": state.additional_image_requests,
-                "image_style": state.image_style,
-                "topic": state.topic,
-                "tone": state.tone,
-                "num_of_image_descriptions": num_of_images_per_segment
-            })
-            system_message = AIMessage(content=generate_segment_image_descriptions_system_prompt)
-            user_message = HumanMessage(content=payload)
-            messages = [system_message, user_message]
-            tasks.append(t.create_task(asyncio.to_thread(model_for_segment_image_descriptions.invoke, messages)))
+    for section_index, section_script_segmented_as_list in enumerate(state.all_sections_scripts_as_lists):
+        section_tasks = []
+        segments_in_section_last_image_durations: list[float] = []
 
-    # this a list container (container = dictionary) with a key "segment_image_descriptions". For each dictionary, the value of this key
-    # is a list of ImageDescription objects.
-    image_descriptions_container_for_all_segments = [task.result().model_dump() for task in tasks]
-    return {"image_descriptions_container_for_all_segments": image_descriptions_container_for_all_segments,
-            "last_image_durations": last_image_durations}
+        async with asyncio.TaskGroup() as t:
+            # for each segment in a section, get image descriptions and last clip durations
+            # for index in range(len(state.script_list)):
+            for segment_in_section_script_index in range(len(section_script_segmented_as_list)):
+                # calculate num of clips in the segment and length of the last image in it
+                num_of_images_per_segment, last_image_duration = compute_length_and_num_of_images_per_segment(
+                    state.all_sections_scripts_durations[section_index][segment_in_section_script_index],
+                    state.ideal_image_duration,
+                    state.minimum_acceptable_image_duration)
+                # for each segment, save the last image duration
+                segments_in_section_last_image_durations.append(last_image_duration)
 
+                # Construct payload to create image descriptions for a segment
+                payload = json.dumps({
+                    "script_segment": state.all_sections_scripts_as_lists[section_index][segment_in_section_script_index].section_script_segment,
+                    "full_script": state.section_scripts[section_index],
+                    "additional_image_requests": state.additional_image_requests,
+                    "image_style": state.image_style,
+                    "topic": state.topic,
+                    "tone": state.tone,
+                    "num_of_image_descriptions": num_of_images_per_segment
+                })
+                system_message = SystemMessage(content=generate_segment_image_descriptions_system_prompt)
+                user_message = HumanMessage(content=payload)
+                messages = [system_message, user_message]
+                section_tasks.append(t.create_task(asyncio.to_thread(model_for_segment_image_descriptions.invoke, messages)))
 
-async def generate_segments_images(state: AgentState) -> dict[str, list[list[Path]]]:
+        # this a list container (container = dictionary) with a key "segment_image_descriptions". For each dictionary, the value of this key
+        # is a list of ImageDescription objects.
+
+        # each section_task.result() is an item with key `segment_image_descriptions` thats a list ImageDescriptions
+        # this is a list that contains SegmentImageDescriptionsItems
+        # each list of SegmentImageDescriptionsItems is associated with one section
+        image_descriptions_container_for_all_segments_in_section = [segment_image_descriptions_item.result() for segment_image_descriptions_item in section_tasks]
+        ### now we have image descriptions for one section, instead of returning, let's save this in an array and use it later
+        # all_sections_segments_last_image_durations is a list, of a list of floats
+        # each otter list corresponds to a section
+        # each inner list contains last image durations in a section (one for each segment in the section)
+        # all_sections_image_descriptions_container_for_all_segments is a list, of list or SegmentImageDescriptionsContainer
+        # remember that each SegmentImageDescriptionsContainer itself contains a list of ImageDescriptions in its segment_image_descriptions attribute
+        all_sections_segments_last_image_durations.append(segments_in_section_last_image_durations)
+        all_sections_image_descriptions_container_for_all_segments.append(image_descriptions_container_for_all_segments_in_section)
+
+    return {"all_sections_image_descriptions_container_for_all_segments": all_sections_image_descriptions_container_for_all_segments,
+            "all_sections_segments_last_image_durations": all_sections_segments_last_image_durations}
+
+# semi done
+async def generate_segments_images(state: AgentState) -> dict[str, list[list[list[Path]]]]:
     if state.debug_mode:
-        print("Generating clip images...")
+        print("Generating segment images...")
 
-    rate_limit_delay = 7
-    image_paths_for_all_segments: list[list[Path]] = []
-    async with asyncio.TaskGroup() as t:
-        # image_descriptions_container has key whose value is a list of ImageDescriptions
-        for image_descriptions_container in state.image_descriptions_container_for_all_segments:
-            # image_descriptions_container has key whose value is a list of ImageDescriptions
-            image_descriptions_objs_for_segment = image_descriptions_container.get("segment_image_descriptions")
-            num_of_images_to_create = len(image_descriptions_objs_for_segment)
-            image_descriptions_for_segment = [image_description.description for image_description in
-                                              image_descriptions_objs_for_segment]
-            segment_image_paths: list[Path] = [Path(os.getcwd()) / "generated_image_files" / f"{uuid.uuid4().hex}.jpg"
-                                               for _ in range(num_of_images_to_create)]
-            segment_image_paths[0].parent.mkdir(parents=True, exist_ok=True)
-            image_paths_for_all_segments.append(segment_image_paths)
-            t.create_task(
-                asyncio.to_thread(generate_single_image, image_descriptions_for_segment, segment_image_paths, "google",
-                                  "portrait"))
-            # for Google image gen rate limits
-            if state.image_model == "google":
-                await asyncio.sleep(rate_limit_delay * len(image_descriptions_for_segment))
+    #
+    all_segments_image_paths_for_all_sections: list[list[list[Path]]] = []
 
-    return {"image_paths_for_all_segments": image_paths_for_all_segments}
+    # section_image_descriptions_container_for_all_segments_in_section is a list of image descriptions, one for each segment in the section
+    for section_image_descriptions_container_for_all_segments_in_section in state.all_sections_image_descriptions_container_for_all_segments:
+        image_paths_for_all_segments_in_section: list[list[Path]] = []
+        tasks = []
+        try:
+            async with asyncio.TaskGroup() as t:
+                # image_descriptions_container has key whose value is a list of ImageDescriptions
+                for segment_index, image_descriptions_container in enumerate(section_image_descriptions_container_for_all_segments_in_section):
+                    # image_descriptions_container has key whose value is a list of ImageDescriptions
+                    image_descriptions_objs_for_segment = image_descriptions_container.segment_image_descriptions
+                    num_of_images_to_create = len(image_descriptions_objs_for_segment)
+                    image_descriptions_for_segment = [image_description.description for image_description in image_descriptions_objs_for_segment]
+                    segment_image_paths: list[Path] = [Path(os.getcwd()) / "generated_image_files" / f"{uuid.uuid4().hex}.jpg" for _ in range(num_of_images_to_create)]
+                    segment_image_paths[0].parent.mkdir(parents=True, exist_ok=True)
+                    image_paths_for_all_segments_in_section.append(segment_image_paths)
 
+                    if state.debug_mode:
+                        print(f"[generate_segments_images] segment_index={segment_index} num_images={len(image_descriptions_for_segment)} model={state.image_model}")
+                        print(f"[generate_segments_images] segment_index={segment_index} first_out_path={segment_image_paths[0] if segment_image_paths else None}")
+                    task = t.create_task(pseudo_generate_image(image_descriptions=image_descriptions_for_segment,
+                                                        image_paths=segment_image_paths,
+                                                        image_model_provider="flux",
+                                                        orientation="landscape",
+                                                        ))
+                    # task = t.create_task(asyncio.to_thread(generate_single_image, image_descriptions_for_segment, segment_image_paths, "google", "portrait"))
+                    if state.debug_mode:
+                        try:
+                            task.set_name(f"generate_image[{segment_index}]")
+                        except Exception:
+                            pass
+                    tasks.append((segment_index, task, segment_image_paths))
 
+        except* Exception as eg:
+            import traceback
+            print("\n[TaskGroup ERROR] generate_segments_images failed")
+            print(f"[TaskGroup ERROR] topic={getattr(state, 'topic', None)}")
+            print(f"[TaskGroup ERROR] segments_created={len(image_paths_for_all_segments_in_section)} total_tasks={len(tasks)}")
+            for seg_i, task, paths in tasks:
+                try:
+                    name = task.get_name()
+                except Exception:
+                    name = None
+                print(f"[TaskGroup ERROR] task_meta segment_index={seg_i} task_name={name} num_paths={len(paths)} first_path={paths[0] if paths else None}")
+            for i, sub in enumerate(eg.exceptions, start=1):
+                print(f"\n[TaskGroup ERROR] sub-exception #{i}: {type(sub).__name__}: {sub}")
+                print("".join(traceback.format_exception(type(sub), sub, sub.__traceback__)))
+            raise
+
+        all_segments_image_paths_for_all_sections.append(image_paths_for_all_segments_in_section)
+
+    return {"all_segments_image_paths_for_all_sections": all_segments_image_paths_for_all_sections}
+
+#
+# async def generate_all_sections_segments_images(state: AgentState) -> dict[str, list[list[Path]]]:
+#     if state.debug_mode:
+#         print("Generating clip images...")
+#
+#     rate_limit_delay = 7
+#     all_sections_image_paths_for_all_segments = []
+#     for section_image_descriptions_container_for_all_segments in state.all_sections_image_descriptions_container_for_all_segments:
+#         section_image_paths_for_all_segments: list[list[Path]] = []
+#         async with asyncio.TaskGroup() as t:
+#             # image_descriptions_container has key whose value is a list of ImageDescriptions
+#             for image_descriptions_container in section_image_descriptions_container_for_all_segments:
+#                 # image_descriptions_container has key whose value is a list of ImageDescriptions
+#                 image_descriptions_objs_for_segment = image_descriptions_container.get("segment_image_descriptions")
+#                 num_of_images_to_create = len(image_descriptions_objs_for_segment)
+#                 image_descriptions_for_segment = [image_description.description for image_description in
+#                                                   image_descriptions_objs_for_segment]
+#                 segment_image_paths: list[Path] = [Path(os.getcwd()) / "generated_image_files" / f"{uuid.uuid4().hex}.jpg"
+#                                                    for _ in range(num_of_images_to_create)]
+#                 segment_image_paths[0].parent.mkdir(parents=True, exist_ok=True)
+#                 section_image_paths_for_all_segments.append(segment_image_paths)
+#                 t.create_task(
+#                     asyncio.to_thread(generate_single_image, image_descriptions_for_segment, segment_image_paths, "google",
+#                                       "portrait"))
+#                 # for Google image gen rate limits
+#                 if state.image_model == "google":
+#                     await asyncio.sleep(rate_limit_delay * len(image_descriptions_for_segment))
+#         all_sections_image_paths_for_all_segments.append(section_image_paths_for_all_segments)
+#
+#     return {"all_sections_image_paths_for_all_segments": all_sections_image_paths_for_all_segments}
+
+# semi done
 async def animate_segments_images(state: AgentState) -> dict[str, list[Path]]:
     if state.debug_mode:
         print("Generating animated clip images...")
-    video_paths = []
-    motion_pattern = ["ken_burns"]
-    pattern_length = len(motion_pattern)
-    pattern_start = 0
-    async with asyncio.TaskGroup() as t:
-        for i in range(len(state.image_paths_for_all_segments)):
-            video_path = Path(os.getcwd()) / "generated_video_files" / f"{uuid.uuid4().hex}.mp4"
-            video_path.parent.mkdir(parents=True, exist_ok=True)
-            video_paths.append(video_path)
-            motion_start_index = pattern_start % pattern_length
-            t.create_task(asyncio.to_thread(animate_with_motion_effect,
-                                            image_paths=state.image_paths_for_all_segments[i],
-                                            video_path=video_path,
-                                            ideal_image_duration=state.ideal_image_duration,
-                                            last_image_duration=state.last_image_durations[i],
-                                            motion_pattern=motion_pattern,
-                                            motion_start_index=motion_start_index))
-            pattern_start += len(state.image_paths_for_all_segments[i])
-    return {"video_paths": video_paths}
+    all_sections_final_video_paths: list[Path] = []
+    # image_paths_for_all_segments_in_section is a list of lists of paths
+    for section_index, image_paths_for_all_segments_in_section in enumerate(state.all_segments_image_paths_for_all_sections):
+        video_paths_for_segments_in_section: list[Path] = []
+        motion_pattern = ["zoom_in", "zoom_out"]
+        pattern_length = len(motion_pattern)
+        pattern_start = 0
+        tasks = []
+        loop = asyncio.get_running_loop()
+        with ProcessPoolExecutor(NUM_WORKERS) as executor:
+            for i in range(len(image_paths_for_all_segments_in_section)):
+                video_path = Path(os.getcwd()) / "generated_video_files" / f"{uuid.uuid4().hex}.mp4"
+                video_path.parent.mkdir(parents=True, exist_ok=True)
+                video_paths_for_segments_in_section.append(video_path)
+                motion_start_index = pattern_start % pattern_length
+                task = loop.run_in_executor(executor,
+                                        animate_with_motion_effect,
+                                        image_paths_for_all_segments_in_section[i],
+                                        video_path,
+                                        float(state.ideal_image_duration),
+                                        state.all_sections_segments_last_image_durations[section_index][i],
+                                        motion_pattern,
+                                        motion_start_index
+                                            )
+                tasks.append(task)
+                pattern_start += len(image_paths_for_all_segments_in_section[i])
+            await asyncio.gather(*tasks)
+
+        # by here, video_paths_for_segments_in_section contains a list of paths to animated videos
+        # we should concatenate them with their audio
+
+        all_segments_in_section_video_clips = [ffmpeg.input(segment_video_path) for segment_video_path in video_paths_for_segments_in_section]
+
+        section_time_of_creation = datetime.now().strftime("%Y%m%d%H%M%S")
+
+        section_final_video_path = Path(os.getcwd()) / "section_generated_final_video_files" / f"{section_time_of_creation}.mp4"
+        section_final_video_path.parent.mkdir(parents=True, exist_ok=True)
+
+        section_video_clip_concatenated = ffmpeg.concat(*all_segments_in_section_video_clips, v=1, a=0).node
+        section_video_stream = section_video_clip_concatenated[0]
+        # Add the audio file
+        section_audio_stream = ffmpeg.input(state.all_sections_generated_audio_file_paths[section_index])
+        section_final_output = ffmpeg.output(
+            section_video_stream,
+            section_audio_stream,
+            str(section_final_video_path),
+            vcodec='libx264',
+            acodec='aac',
+            # shortest=None
+        )
+        section_final_output.run(overwrite_output=True)
+        all_sections_final_video_paths.append(section_final_video_path)
 
 
+    return {"all_sections_final_video_paths": all_sections_final_video_paths}
+
+#
+# async def animate_segments_images(state: AgentState) -> dict[str, list[Path]]:
+#     if state.debug_mode:
+#         print("Generating animated clip images...")
+#     all_sections_video_paths = []
+#     for section_image_paths_for_all_segments in state.all_segments_image_paths_for_all_sections:
+#         video_paths = []
+#         motion_pattern = ["ken_burns"]
+#         pattern_length = len(motion_pattern)
+#         pattern_start = 0
+#         async with asyncio.TaskGroup() as t:
+#             for i in range(len(state.image_paths_for_all_segments)):
+#                 video_path = Path(os.getcwd()) / "generated_video_files" / f"{uuid.uuid4().hex}.mp4"
+#                 video_path.parent.mkdir(parents=True, exist_ok=True)
+#                 video_paths.append(video_path)
+#                 motion_start_index = pattern_start % pattern_length
+#                 t.create_task(asyncio.to_thread(animate_with_motion_effect,
+#                                                 image_paths=state.image_paths_for_all_segments[i],
+#                                                 video_path=video_path,
+#                                                 ideal_image_duration=state.ideal_image_duration,
+#                                                 last_image_duration=state.last_image_durations[i],
+#                                                 motion_pattern=motion_pattern,
+#                                                 motion_start_index=motion_start_index))
+#                 pattern_start += len(state.image_paths_for_all_segments[i])
+#         all_sections_video_paths.append(video_paths)
+#     return {"all_sections_video_paths": all_sections_video_paths}
+#
+# semi done
 def assemble_final_video(state: AgentState) -> dict[str, Path]:
     """
     This function assembles the final video by concatenating all the clips into one video stream and multiplexing it
@@ -584,39 +816,170 @@ def assemble_final_video(state: AgentState) -> dict[str, Path]:
     """
     if state.debug_mode:
         print("Assembling final video file...")
-    time_of_creation = datetime.now().strftime("%Y%m%d%H%M%S")
-    final_video_path = Path(os.getcwd()) / "generated_final_video_files" / f"{time_of_creation}.mp4"
+
+    final_video_time_of_creation = datetime.now().strftime("%Y%m%d%H%M%S")
+    final_video_path = (
+        Path(os.getcwd())
+        / "long_form_generated_final_video_files"
+        / f"{final_video_time_of_creation}.mp4"
+    )
     final_video_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Create input streams for each video
-    video_clips = [ffmpeg.input(video_path) for video_path in state.video_paths]
-    if state.add_end_buffer:
-        buffer_video_file_path = ""
-        if state.orientation == "Portrait":
-            buffer_video_file_path = Path(os.getcwd()) / "utility_assets" / "black_buffer_portrait.mp4"
-        else:
-            buffer_video_file_path = Path(os.getcwd()) / "utility_assets" / "black_buffer_landscape.mp4"
-        video_clips.append(ffmpeg.input(str(buffer_video_file_path)))
+    all_sections_video_clips = [
+        ffmpeg.input(str(section_video_path))
+        for section_video_path in state.all_sections_final_video_paths
+    ]
 
-    # Concatenate video clips (v=1, a=0 since there is no audio anyway)
-    concatenated = ffmpeg.concat(*video_clips, v=1, a=0).node
-    video_stream = concatenated[0]
+    # ffmpeg.concat(v=1, a=1) expects streams in this order:
+    # v1, a1, v2, a2, v3, a3, ...
+    all_sections_streams = []
+    for section_clip in all_sections_video_clips:
+        all_sections_streams.append(section_clip.video)
+        all_sections_streams.append(section_clip.audio)
 
-    # Add the audio file
-    audio_stream = ffmpeg.input(state.generated_audio_file_path)
+    all_sections_video_clip_concatenated = ffmpeg.concat(
+        *all_sections_streams,
+        v=1,
+        a=1
+    ).node
 
-    # Combine video and audio, output to file
+    all_sections_video_stream = all_sections_video_clip_concatenated[0]
+    all_sections_audio_stream = all_sections_video_clip_concatenated[1]
+
     final_output = ffmpeg.output(
-        video_stream,
-        audio_stream,
+        all_sections_video_stream,
+        all_sections_audio_stream,
         str(final_video_path),
-        vcodec='libx264',
-        acodec='aac',
-        # shortest=None
+        vcodec="libx264",
+        acodec="aac",          # safer than 'copy' for concat pipelines
+        audio_bitrate="192k",
+        movflags="+faststart",
     )
+
     final_output.run(overwrite_output=True)
     return {"final_video_path": final_video_path}
 
+# def assemble_final_video(state: AgentState) -> dict[str, Path]:
+#     """
+#     This function assembles the final video by concatenating all the clips into one video stream and multiplexing it
+#     with the audio stream to create a single video file.
+#     It returns a dictionary with a single key 'final_video_path' whose value is the path to the final video file.
+#     Parameters:
+#         state (AgentState): The agent state.
+#     Returns:
+#         dict[str, Path]: The final video file path.
+#     """
+#     if state.debug_mode:
+#         print("Assembling final video file...")
+#
+#     final_video_time_of_creation = datetime.now().strftime("%Y%m%d%H%M%S")
+#     final_video_path = Path(os.getcwd()) / "long_form_generated_final_video_files" / f"{final_video_time_of_creation}.mp4"
+#     final_video_path.parent.mkdir(parents=True, exist_ok=True)
+#
+#     all_sections_video_clips = [ffmpeg.input(section_video_path) for section_video_path in
+#                                            state.all_sections_final_video_paths]
+#
+#
+#
+#     all_sections_video_clip_concatenated = ffmpeg.concat(*all_sections_video_clips, v=1, a=1).node
+#     all_sections_video_stream = all_sections_video_clip_concatenated[0]
+#     all_sections_audio_stream = all_sections_video_clip_concatenated[1]
+#
+#
+#     final_output = ffmpeg.output(
+#         all_sections_video_stream,
+#         all_sections_audio_stream,
+#         str(final_video_path),
+#         vcodec='libx264',
+#         acodec='copy',
+#         # shortest=None
+#     )
+#     final_output.run(overwrite_output=True)
+#     return {"final_video_path": final_video_path}
+#
+
+
+
+
+# def assemble_final_video(state: AgentState) -> dict[str, Path]:
+#     """
+#     This function assembles the final video by concatenating all the clips into one video stream and multiplexing it
+#     with the audio stream to create a single video file.
+#     It returns a dictionary with a single key 'final_video_path' whose value is the path to the final video file.
+#     Parameters:
+#         state (AgentState): The agent state.
+#     Returns:
+#         dict[str, Path]: The final video file path.
+#     """
+#     if state.debug_mode:
+#         print("Assembling final video file...")
+#
+#     all_sections_final_video_paths = []
+#
+#     # Create input streams for each video
+#     for section_index, section_video_paths in enumerate(state.all_sections_video_paths):
+#         section_time_of_creation = datetime.now().strftime("%Y%m%d%H%M%S")
+#         section_final_video_path = Path(os.getcwd()) / "section_generated_final_video_files" / f"{section_time_of_creation}.mp4"
+#         section_final_video_path.parent.mkdir(parents=True, exist_ok=True)
+#
+#
+#         section_video_clips = [ffmpeg.input(video_path) for video_path in section_video_paths]
+#     # if state.add_end_buffer:
+#     #     buffer_video_file_path = ""
+#     #     if state.orientation == "Portrait":
+#     #         buffer_video_file_path = Path(os.getcwd()) / "utility_assets" / "black_buffer_portrait.mp4"
+#     #     else:
+#     #         buffer_video_file_path = Path(os.getcwd()) / "utility_assets" / "black_buffer_landscape.mp4"
+#     #     video_clips.append(ffmpeg.input(str(buffer_video_file_path)))
+#
+#     # Concatenate video clips (v=1, a=0 since there is no audio anyway)
+#         concatenated = ffmpeg.concat(*section_video_clips, v=1, a=0).node
+#         section_video_stream = concatenated[0]
+#
+#     # Add the audio file
+#         section_audio_stream = ffmpeg.input(state.all_sections_generated_audio_file_paths[section_index])
+#
+#         # Combine video and audio, output to file
+#         section_final_output = ffmpeg.output(
+#             section_video_stream,
+#             section_audio_stream,
+#             str(section_final_video_path),
+#             vcodec='libx264',
+#             acodec='aac',
+#             # shortest=None
+#         )
+#         section_final_output.run(overwrite_output=True)
+#         all_sections_final_video_paths.append(section_final_video_path)
+#
+#     final_video_time_of_creation = datetime.now().strftime("%Y%m%d%H%M%S")
+#     final_video_path = Path(os.getcwd()) / "generated_final_video_files" / f"{final_video_time_of_creation}.mp4"
+#     final_video_path.parent.mkdir(parents=True, exist_ok=True)
+#
+#     inputs = [ffmpeg.input(str(p)) for p in all_sections_final_video_paths]
+#
+#     streams = []
+#     for i in inputs:
+#         streams += [i.video, i.audio]  # order matters: v1,a1,v2,a2,...
+#
+#     out = ffmpeg.concat(*streams, v=1, a=1).node
+#     out_v, out_a = out[0], out[1]
+#
+#     (
+#         ffmpeg
+#         .output(out_v, out_a, str(final_video_path), vcodec="libx264", acodec="aac", pix_fmt="yuv420p")
+#         .run(overwrite_output=True)
+#     )
+#
+#     # if state.add_end_buffer:
+#     #     buffer_video_file_path = ""
+#     #     if state.orientation == "Portrait":
+#     #         buffer_video_file_path = Path(os.getcwd()) / "utility_assets" / "black_buffer_portrait.mp4"
+#     #     else:
+#     #         buffer_video_file_path = Path(os.getcwd()) / "utility_assets" / "black_buffer_landscape.mp4"
+#     #     video_clips.append(ffmpeg.input(str(buffer_video_file_path)))
+#
+#     return {"final_video_path": final_video_path}
+#
 
 def should_debug(state: AgentState) -> bool:
     """
@@ -656,13 +1019,33 @@ graph_builder = StateGraph(AgentState)
 # Node definitions
 graph_builder.add_node("resolve_state_values", resolve_agent_state_values)
 graph_builder.add_node("generate_goal", generate_goal)
-graph_builder.add_node("generate_intro", generate_intro)
+graph_builder.add_node("generate_structure", generate_structure)
+graph_builder.add_node("generate_section_scripts", generate_section_scripts)
+graph_builder.add_node("segment_section_scripts", segment_section_scripts)
+graph_builder.add_node("generate_section_audios", generate_section_audios)
+graph_builder.add_node("compute_section_script_timings", compute_section_script_timings)
+graph_builder.add_node("generate_segments_image_descriptions", generate_segments_image_descriptions)
+graph_builder.add_node("generate_segments_images", generate_segments_images)
+graph_builder.add_node("animate_segments_images", animate_segments_images)
+graph_builder.add_node("assemble_final_video", assemble_final_video)
 
 graph_builder.add_edge(START, "resolve_state_values")
 graph_builder.add_edge("resolve_state_values", "generate_goal")
-graph_builder.add_edge("generate_goal", "generate_intro")
+graph_builder.add_edge("generate_goal", "generate_structure")
+graph_builder.add_edge( "generate_structure", "generate_section_scripts")
+graph_builder.add_edge("generate_section_scripts", "segment_section_scripts")
+graph_builder.add_edge("segment_section_scripts", "generate_section_audios")
+graph_builder.add_edge("generate_section_audios", "compute_section_script_timings")
+graph_builder.add_edge("compute_section_script_timings", "generate_segments_image_descriptions")
+graph_builder.add_edge("generate_segments_image_descriptions", "generate_segments_images")
+graph_builder.add_edge("generate_segments_images", "animate_segments_images")
+graph_builder.add_edge("animate_segments_images", "assemble_final_video")
+graph_builder.add_edge("assemble_final_video", END)
+# graph_builder.add_edge("generate_script", "segment_script_segments")
+# graph_builder.add_edge("segment_script_segments", "generate_segment_audios")
+# graph_builder.add_edge("generate_segment_audios", END)
 
-graph_builder.add_edge("generate_intro", END)
+
 # graph_builder.add_node("generate_goal", generate_goal)
 # graph_builder.add_node("generate_hook", generate_hook)
 # graph_builder.add_node("generate_script", generate_script)
@@ -698,7 +1081,7 @@ graph_builder.add_edge("generate_intro", END)
 #
 # )
 # graph_builder.add_edge("merge_visual_and_audio", "debug_graph")
-graph_builder.add_edge("debug_graph", END)
+# graph_builder.add_edge("debug_graph", END)
 video_creator = graph_builder.compile()
 
 # def split_scripts(state: AgentState) -> dict[str: list[str]]:

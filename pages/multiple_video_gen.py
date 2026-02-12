@@ -94,13 +94,15 @@ with st.form("video_form"):
     )
     image_model = st.selectbox(
         "Image Model",
-        options=["google", "openai"],
+        options=["google", "openai", "flux"],
         index=0,
     )
     image_style = st.selectbox(
         "Image Style",
         options=[
             "Photo Realism",
+            "Isometric Illustrations",
+            "Vector Illustrations",
             "Hyperrealism",
             "Cartoon / 2D Illustration",
             "Minimalist / Flat Illustration",
@@ -123,7 +125,8 @@ with st.form("video_form"):
             "american_male_story_teller",
             "american_female_narrator",
             "american_female_media_influencer",
-            "american_female_media_influencer_2"
+            "american_female_media_influencer_2",
+            "new_male_convo"
         ],
         index=2,  # american_female_conversationalist
     )
@@ -146,7 +149,6 @@ with st.form("video_form"):
     add_profile_info = st.toggle("Add Profile Information", False)
 
     submitted = st.form_submit_button("Generate Video 🚀")
-
 # ---- Helper: run async workflow ----
 async def _run_video_creator(payload: dict):
     return await video_creator.ainvoke(payload)
@@ -160,78 +162,193 @@ if submitted:
         for profile in all_profile:
             if profile.name == st.session_state.profile:
                 current_profile = profile
-        additional_instructions+=f"The script is for a page called {current_profile.name}."
+        additional_instructions += f"The script is for a page called {current_profile.name}."
+
     # topics is a list
     st.write("Extracting Topics from text...")
     topic_list = extract_topics_form_text(topics)
     st.write(f"Extracted Topics: {topic_list}")
 
-    for topic in topic_list:
-        st.write(f"Creating Video for Topic: {topic}")
-        payload = {
-            "topic": topic,
-            "purpose": purpose,
-            "target_audience": target_audience,
-            "tone": tone,
-            "platform": platform,
-            "duration_seconds": int(duration_seconds),
-            "orientation": orientation,
-            "model_provider": model_provider,
-            "image_model": image_model,
-            "image_style": image_style,
-            "voice_actor": voice_actor,
-            "additional_instructions": additional_instructions or None,
-            "additional_image_requests": additional_image_requests or None,
-            "style_reference": style_reference or "",
-            "debug_mode": debug_mode,
-        }
+    # IMPORTANT: make a copy so you don't mutate the same list object you iterate
+    remaining_topics = topic_list.copy()
 
-        st.write("### Payload")
-        st.json(payload)
+    # ✅ Create ONE event loop for the entire batch (no asyncio.run inside the loop)
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
 
-        with st.spinner("Generating video... this may take a bit depending on the models."):
-            try:
-                end_state = asyncio.run(_run_video_creator(payload))
-            except RuntimeError as e:
-                # Fallback in case an event loop is already running
-                # (can happen in some environments)
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                end_state = loop.run_until_complete(_run_video_creator(payload))
-                loop.close()
+    try:
+        for topic in topic_list:
+            st.write(f"Creating Video for Topic: {topic}")
+            payload = {
+                "topic": topic,
+                "purpose": purpose,
+                "target_audience": target_audience,
+                "tone": tone,
+                "platform": platform,
+                "duration_seconds": int(duration_seconds),
+                "orientation": orientation,
+                "model_provider": model_provider,
+                "image_model": image_model,
+                "image_style": image_style,
+                "voice_actor": voice_actor,
+                "additional_instructions": additional_instructions or None,
+                "additional_image_requests": additional_image_requests or None,
+                "style_reference": style_reference or "",
+                "debug_mode": debug_mode,
+            }
 
-        final_video_path = end_state.get("final_video_path")
+            st.write("### Payload")
+            st.json(payload)
 
-        st.markdown("---")
-        st.subheader("Result")
+            with st.spinner("Generating video... this may take a bit depending on the models."):
+                try:
+                    # ✅ run on the same loop every time
+                    end_state = loop.run_until_complete(_run_video_creator(payload))
+                except Exception as e:
+                    st.error(
+                        f"An Error Occured while generating the video for topic: {topic}. Error: {e}"
+                    )
+                    st.write("The remaining topics are as follows:")
+                    st.text_input(label="Remaining Topics", value=str(remaining_topics))
+                    # stop the batch on first failure (change to `continue` if you prefer)
+                    break
 
-        if not final_video_path:
-            st.error("No `final_video_path` was returned from the agent state.")
-        else:
-            final_video_path = Path(final_video_path)
+            # Only pop after success
+            remaining_topics.pop(0)
 
-            st.write(f"**Final video path:** `{final_video_path}`")
+            final_video_path = end_state.get("final_video_path")
 
-            if final_video_path.exists():
-                # Show video in Streamlit
-                st.video(str(final_video_path))
+            st.markdown("---")
+            st.subheader("Result")
+
+            if not final_video_path:
+                st.error("No `final_video_path` was returned from the agent state.")
             else:
-                st.warning(
-                    "The agent returned a `final_video_path`, but the file does not exist on disk. "
-                    "Double-check where the video is being saved."
-                )
+                final_video_path = Path(final_video_path)
 
-        if debug_mode:
-            st.markdown("### Raw Agent State")
-            # end_state might be a dict-like LangGraph state; try to display it
-            try:
-                st.json(
-                    {
-                        k: str(v)
-                        if isinstance(v, (Path, set))
-                        else v
-                        for k, v in end_state.items()
-                    }
-                )
-            except Exception:
-                st.write(end_state)
+                st.write(f"**Final video path:** `{final_video_path}`")
+
+                if final_video_path.exists():
+                    st.video(str(final_video_path))
+                else:
+                    st.warning(
+                        "The agent returned a `final_video_path`, but the file does not exist on disk. "
+                        "Double-check where the video is being saved."
+                    )
+
+            if debug_mode:
+                st.markdown("### Raw Agent State")
+                try:
+                    st.json(
+                        {
+                            k: str(v) if isinstance(v, (Path, set)) else v
+                            for k, v in end_state.items()
+                        }
+                    )
+                except Exception:
+                    st.write(end_state)
+
+    finally:
+        # ✅ always close the loop you created
+        loop.close()
+        asyncio.set_event_loop(None)
+
+#
+# # ---- Helper: run async workflow ----
+# async def _run_video_creator(payload: dict):
+#     return await video_creator.ainvoke(payload)
+#
+# # ---- Handle form submission ----
+# if submitted:
+#     # Build payload matching AgentState fields
+#     if "profile" in st.session_state and add_profile_info:
+#         all_profile = get_all_profiles()
+#         current_profile = None
+#         for profile in all_profile:
+#             if profile.name == st.session_state.profile:
+#                 current_profile = profile
+#         additional_instructions+=f"The script is for a page called {current_profile.name}."
+#     # topics is a list
+#     st.write("Extracting Topics from text...")
+#     topic_list = extract_topics_form_text(topics)
+#     st.write(f"Extracted Topics: {topic_list}")
+#     remaining_topics = topic_list
+#
+#     for topic in topic_list:
+#         st.write(f"Creating Video for Topic: {topic}")
+#         payload = {
+#             "topic": topic,
+#             "purpose": purpose,
+#             "target_audience": target_audience,
+#             "tone": tone,
+#             "platform": platform,
+#             "duration_seconds": int(duration_seconds),
+#             "orientation": orientation,
+#             "model_provider": model_provider,
+#             "image_model": image_model,
+#             "image_style": image_style,
+#             "voice_actor": voice_actor,
+#             "additional_instructions": additional_instructions or None,
+#             "additional_image_requests": additional_image_requests or None,
+#             "style_reference": style_reference or "",
+#             "debug_mode": debug_mode,
+#         }
+#
+#         st.write("### Payload")
+#         st.json(payload)
+#
+#         with st.spinner("Generating video... this may take a bit depending on the models."):
+#             try:
+#                 end_state = asyncio.run(_run_video_creator(payload))
+#                 print(1)
+#             except RuntimeError as e:
+#                 print(2)
+#                 # Fallback in case an event loop is already running
+#                 # (can happen in some environments)
+#                 loop = asyncio.new_event_loop()
+#                 asyncio.set_event_loop(loop)
+#                 end_state = loop.run_until_complete(_run_video_creator(payload))
+#                 loop.close()
+#             except Exception as e:
+#                 print(3)
+#                 # if for any reason an error ocuurs and the video isnt generated, just show which things are left
+#                 st.error(f"An Error Occured while generating the video for topic: {topic}. Error: {e}")
+#                 st.write("The remaining topics are as follows:")
+#                 remaining_topics_text_input = st.text_input(label="Remaining Topics", value=remaining_topics)
+#         print(4)
+#         final_video_path = end_state.get("final_video_path")
+#
+#         st.markdown("---")
+#         st.subheader("Result")
+#
+#         if not final_video_path:
+#             st.error("No `final_video_path` was returned from the agent state.")
+#         else:
+#             final_video_path = Path(final_video_path)
+#
+#             st.write(f"**Final video path:** `{final_video_path}`")
+#
+#             if final_video_path.exists():
+#                 # Show video in Streamlit
+#                 st.video(str(final_video_path))
+#             else:
+#                 st.warning(
+#                     "The agent returned a `final_video_path`, but the file does not exist on disk. "
+#                     "Double-check where the video is being saved."
+#                 )
+#
+#         if debug_mode:
+#             st.markdown("### Raw Agent State")
+#             # end_state might be a dict-like LangGraph state; try to display it
+#             try:
+#                 st.json(
+#                     {
+#                         k: str(v)
+#                         if isinstance(v, (Path, set))
+#                         else v
+#                         for k, v in end_state.items()
+#                     }
+#                 )
+#             except Exception:
+#                 st.write(end_state)
+#         remaining_topics.pop(0)

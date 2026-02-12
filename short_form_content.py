@@ -10,7 +10,7 @@ import asyncio
 from datetime import datetime
 # third party packages
 import ffmpeg
-from langchain.messages import AIMessage, HumanMessage
+from langchain.messages import HumanMessage, SystemMessage
 from langgraph.graph import StateGraph
 from langgraph.constants import START, END
 from pydantic import BaseModel, Field
@@ -22,16 +22,28 @@ from system_prompts import (
     short_form_video_hook_generation_system_prompt,
     short_form_script_generation_system_prompt,
     script_enhancer_elevenlabs_v3_system_prompt, script_segmentation_system_prompt,
-    image_descriptions_generator_system_prompt, generate_segment_image_descriptions_system_prompt
+    image_descriptions_generator_system_prompt, generate_segment_image_descriptions_system_prompt, gemini_3_short_form_script_generation_system_prompt,
 )
-from utils import generate_image as generate_single_image, animate_with_motion_effect
+from utils import generate_image, animate_with_motion_effect
 from utils import model_providers, image_models, image_styles, voice_model_versions, voice_models, voice_actors
 from utils import get_video_duration
+from dotenv import load_dotenv
+from aiolimiter import AsyncLimiter
+from concurrent.futures import ProcessPoolExecutor
+NUM_WORKERS = os.cpu_count()
+image_generation_rate_limiter = AsyncLimiter(max_rate=9, time_period=60)
+
+load_dotenv()
 # AI Models
 from langchain_google_genai import ChatGoogleGenerativeAI, HarmBlockThreshold, HarmCategory
 ai_model = init_chat_model(model_provider="google-genai", model="gemini-2.5-pro")
+# ai_model = init_chat_model(model_provider="google-genai", model="gemini-3-pro-preview")
+# ai_model = init_chat_model(model_provider="anthropic", model="claude-opus-4-5-20251101")
+# ai_model = init_chat_model(model_provider="openai", model="")
+# ai_model = init_chat_model(model_provider="xai", model="grok-4-latest")
+USING_GEMINI_3 = False
 
-# ai_model = init_chat_model(model_provider="openai", model="gpt-5.1")
+# ai_model = init_chat_model(model_provider="openai", model="gpt-5.2")
 
 ai_voice_model = ElevenLabs(api_key=os.getenv("ELEVEN_LABS_API_KEY"))
 
@@ -137,7 +149,8 @@ def resolve_agent_state_values(state: AgentState) -> dict[str, str]:
         "american_male_story_teller": "uju3wxzG5OhpWcoi3SMy",
         "american_female_narrator": "yj30vwTGJxSHezdAGsv9",
         "american_female_media_influencer": "kPzsL2i3teMYv0FxEYQ6",
-        "american_female_media_influencer_2": "S9NKLs1GeSTKzXd9D0Lf"
+        "american_female_media_influencer_2": "S9NKLs1GeSTKzXd9D0Lf",
+        "new_male_convo": "1SM7GgM6IMuvQlz2BwM3"
     }
     return {"voice_actor_id": voice_actor_ids_dict.get(state.voice_actor, "")}
 
@@ -160,9 +173,14 @@ def generate_goal(state: AgentState) -> dict[str, str]:
         "purpose": state.purpose,
         "target_audience": state.target_audience,
     })
-    system_message = AIMessage(content=short_form_video_goal_generation_system_prompt)
-    user_message = HumanMessage(content=payload)
-    messages = [system_message, user_message]
+    if USING_GEMINI_3:
+        user_message = HumanMessage(content=short_form_video_goal_generation_system_prompt + "The payload is sa follows: \n" + payload)
+        messages = [user_message]
+    else:
+        system_message = SystemMessage(content=short_form_video_goal_generation_system_prompt)
+        user_message = HumanMessage(content=payload)
+        messages = [system_message, user_message]
+
     goal_container: BaseModel = model_for_goal.invoke(messages)
     return {"goal": goal_container.goal}
 
@@ -186,9 +204,15 @@ def generate_hook(state: AgentState) -> dict[str, str]:
         "tone": state.tone,
         "platform": state.platform,
     })
-    system_message = AIMessage(content=short_form_video_hook_generation_system_prompt)
-    user_message = HumanMessage(content=payload)
-    messages = [system_message, user_message]
+
+    if USING_GEMINI_3:
+        user_message = HumanMessage(content=short_form_video_hook_generation_system_prompt + "The payload is as follows: \n" + payload)
+        messages = [user_message]
+    else:
+        user_message = HumanMessage(content=payload)
+        system_message = SystemMessage(content=short_form_video_hook_generation_system_prompt)
+        messages = [system_message, user_message]
+
     hook_container: BaseModel = model_for_hook.invoke(messages)
     return {"hook": hook_container.hook}
 
@@ -218,11 +242,16 @@ def generate_script(state: AgentState) -> dict[str, str]:
         "duration_seconds": state.duration_seconds,
         "style_reference": state.style_reference,
     })
-
-    system_message = AIMessage(content=short_form_script_generation_system_prompt)
-    user_message = HumanMessage(content=payload)
-    messages = [system_message, user_message]
+    if USING_GEMINI_3:
+        user_message = HumanMessage(content=short_form_script_generation_system_prompt + "The payload is as follows: \n" + payload)
+        messages = [user_message]
+    else:
+        user_message = HumanMessage(content=payload)
+        system_message = SystemMessage(content=short_form_script_generation_system_prompt)
+        messages = [system_message, user_message]
+    print(messages)
     script_container: BaseModel = model_for_script.invoke(messages)
+
     print(type(script_container))
     print(script_container.model_dump())
     return {"script": script_container.model_dump().get("script", "")}
@@ -242,10 +271,14 @@ def enhance_script_for_audio_generation(state: AgentState) -> dict[str, str]:
     payload = json.dumps({
         "script": state.script,
     })
+    if USING_GEMINI_3:
+        user_message = HumanMessage(content=script_enhancer_elevenlabs_v3_system_prompt + "The payload is as follows: \n" + payload)
+        messages = [user_message]
+    else:
+        system_message = SystemMessage(content=script_enhancer_elevenlabs_v3_system_prompt)
+        user_message = HumanMessage(content=payload)
+        messages = [system_message, user_message]
 
-    system_message = AIMessage(content=script_enhancer_elevenlabs_v3_system_prompt)
-    user_message = HumanMessage(content=payload)
-    messages = [system_message, user_message]
     enhanced_script_container: BaseModel = model_for_enhanced_script.invoke(messages)
     return {"enhanced_script": enhanced_script_container.model_dump().get("enhanced_script", "")}
 
@@ -267,11 +300,15 @@ def segment_script(state: AgentState) -> dict[str, list[dict[str, str]]]:
         "script": state.script,
         "enhanced_script": state.enhanced_script,
     })
-    system_message = AIMessage(content=script_segmentation_system_prompt)
-    user_message = HumanMessage(content=payload)
-    messages = [system_message, user_message]
-    script_list_container: BaseModel = model_for_script_list.invoke(messages)
+    if USING_GEMINI_3:
+        user_message = HumanMessage(content=script_segmentation_system_prompt + "The payload is as follows: \n" + payload)
+        messages = [user_message]
+    else:
+        system_message = SystemMessage(content=script_segmentation_system_prompt)
+        user_message = HumanMessage(content=payload)
+        messages = [system_message, user_message]
 
+    script_list_container: BaseModel = model_for_script_list.invoke(messages)
     # print(script_list_container)
     # print(script_list_container.script_list[0])
     return {"script_list": script_list_container.model_dump().get("script_list", [])}
@@ -426,7 +463,6 @@ def compute_length_and_num_of_images_per_segment(segment_duration_seconds: float
     return int(images_count), last_sub_clip_duration
 
 
-
 async def generate_segments_image_descriptions(state: AgentState) -> dict[str, list]:
     """"""
     if state.debug_mode:
@@ -434,31 +470,54 @@ async def generate_segments_image_descriptions(state: AgentState) -> dict[str, l
     model_for_segment_image_descriptions = ai_model.with_structured_output(SegmentImageDescriptionsContainer)
     tasks = []
     last_image_durations: list[float] = []
-    async with asyncio.TaskGroup() as t:
-        # for each segment, get image descriptions and last clip durations
-        for index in range(len(state.script_list)):
-            # calculate num of clips in the segment and length of the last image in it
-            num_of_images_per_segment, last_image_duration = compute_length_and_num_of_images_per_segment(
-                state.script_segment_durations[index],
-                state.ideal_image_duration,
-                state.minimum_acceptable_image_duration)
-            # for each segment, save the last image duration
-            last_image_durations.append(last_image_duration)
+    try:
+        async with asyncio.TaskGroup() as t:
+            # for each segment, get image descriptions and last clip durations
+            for index in range(len(state.script_list)):
+                # calculate num of clips in the segment and length of the last image in it
+                num_of_images_per_segment, last_image_duration = compute_length_and_num_of_images_per_segment(
+                    state.script_segment_durations[index],
+                    state.ideal_image_duration,
+                    state.minimum_acceptable_image_duration)
+                # for each segment, save the last image duration
+                last_image_durations.append(last_image_duration)
 
-            # Construct payload to create image descriptions for a segment
-            payload = json.dumps({
-                "script_segment": state.script_list[index]["script_segment"],
-                "full_script": state.script,
-                "additional_image_requests": state.additional_image_requests,
-                "image_style": state.image_style,
-                "topic": state.topic,
-                "tone": state.tone,
-                "num_of_image_descriptions": num_of_images_per_segment
-            })
-            system_message = AIMessage(content=generate_segment_image_descriptions_system_prompt)
-            user_message = HumanMessage(content=payload)
-            messages = [system_message, user_message]
-            tasks.append(t.create_task(asyncio.to_thread(model_for_segment_image_descriptions.invoke, messages)))
+                # Construct payload to create image descriptions for a segment
+                payload = json.dumps({
+                    "script_segment": state.script_list[index]["script_segment"],
+                    "full_script": state.script,
+                    "additional_image_requests": state.additional_image_requests,
+                    "image_style": state.image_style,
+                    "topic": state.topic,
+                    "tone": state.tone,
+                    "num_of_image_descriptions": num_of_images_per_segment
+                })
+
+                if USING_GEMINI_3:
+                    user_message = HumanMessage(content=generate_segment_image_descriptions_system_prompt + "The payload is: \n:" + payload)
+                    messages = [user_message]
+                else:
+                    system_message = SystemMessage(content=generate_segment_image_descriptions_system_prompt)
+                    user_message = HumanMessage(content=payload)
+                    messages = [system_message, user_message]
+
+                task = t.create_task(asyncio.to_thread(model_for_segment_image_descriptions.invoke, messages))
+                if state.debug_mode:
+                    try:
+                        task.set_name(f"segment_image_desc[{index}]")
+                    except Exception:
+                        pass
+                tasks.append(task)
+    except* Exception as eg:
+        # NOTE: TaskGroup raises an ExceptionGroup; the real error is inside eg.exceptions
+        import traceback
+        print("\n[TaskGroup ERROR] generate_segments_image_descriptions failed")
+        print(f"[TaskGroup ERROR] topic={getattr(state, 'topic', None)}")
+        print(f"[TaskGroup ERROR] num_tasks_created={len(tasks)} num_segments={len(state.script_list)}")
+        for i, sub in enumerate(eg.exceptions, start=1):
+            print(f"\n[TaskGroup ERROR] sub-exception #{i}: {type(sub).__name__}: {sub}")
+            print("".join(traceback.format_exception(type(sub), sub, sub.__traceback__)))
+        raise
 
 
     # this a list container (container = dictionary) with a key "segment_image_descriptions". For each dictionary, the value of this key
@@ -467,54 +526,230 @@ async def generate_segments_image_descriptions(state: AgentState) -> dict[str, l
     return {"image_descriptions_container_for_all_segments": image_descriptions_container_for_all_segments,
             "last_image_durations": last_image_durations}
 
+# async def generate_segments_image_descriptions(state: AgentState) -> dict[str, list]:
+#     """"""
+#     if state.debug_mode:
+#         print("Generating segment image descriptions...")
+#     model_for_segment_image_descriptions = ai_model.with_structured_output(SegmentImageDescriptionsContainer)
+#     tasks = []
+#     last_image_durations: list[float] = []
+#     async with asyncio.TaskGroup() as t:
+#         # for each segment, get image descriptions and last clip durations
+#         for index in range(len(state.script_list)):
+#             # calculate num of clips in the segment and length of the last image in it
+#             num_of_images_per_segment, last_image_duration = compute_length_and_num_of_images_per_segment(
+#                 state.script_segment_durations[index],
+#                 state.ideal_image_duration,
+#                 state.minimum_acceptable_image_duration)
+#             # for each segment, save the last image duration
+#             last_image_durations.append(last_image_duration)
+#
+#             # Construct payload to create image descriptions for a segment
+#             payload = json.dumps({
+#                 "script_segment": state.script_list[index]["script_segment"],
+#                 "full_script": state.script,
+#                 "additional_image_requests": state.additional_image_requests,
+#                 "image_style": state.image_style,
+#                 "topic": state.topic,
+#                 "tone": state.tone,
+#                 "num_of_image_descriptions": num_of_images_per_segment
+#             })
+#             system_message = SystemMessage(content=generate_segment_image_descriptions_system_prompt)
+#             user_message = HumanMessage(content=payload)
+#             messages = [system_message, user_message]
+#             tasks.append(t.create_task(asyncio.to_thread(model_for_segment_image_descriptions.invoke, messages)))
+#
+#
+#     # this a list container (container = dictionary) with a key "segment_image_descriptions". For each dictionary, the value of this key
+#     # is a list of ImageDescription objects.
+#     image_descriptions_container_for_all_segments = [task.result().model_dump() for task in tasks]
+#     return {"image_descriptions_container_for_all_segments": image_descriptions_container_for_all_segments,
+#             "last_image_durations": last_image_durations}
 
 async def generate_segments_images(state: AgentState) -> dict[str, list[list[Path]]]:
     if state.debug_mode:
-        print("Generating clip images...")
-
-    rate_limit_delay = 7
+        print("Generating segment images...")
     image_paths_for_all_segments: list[list[Path]] = []
-    async with asyncio.TaskGroup() as t:
-        # image_descriptions_container has key whose value is a list of ImageDescriptions
-        for image_descriptions_container in state.image_descriptions_container_for_all_segments:
+    tasks = []
+    try:
+        async with asyncio.TaskGroup() as t:
             # image_descriptions_container has key whose value is a list of ImageDescriptions
-            image_descriptions_objs_for_segment = image_descriptions_container.get("segment_image_descriptions")
-            num_of_images_to_create = len(image_descriptions_objs_for_segment)
-            image_descriptions_for_segment = [image_description.description for image_description in image_descriptions_objs_for_segment]
-            segment_image_paths: list[Path] = [Path(os.getcwd()) / "generated_image_files" / f"{uuid.uuid4().hex}.jpg" for _ in range(num_of_images_to_create)]
-            segment_image_paths[0].parent.mkdir(parents=True, exist_ok=True)
-            image_paths_for_all_segments.append(segment_image_paths)
-            t.create_task(asyncio.to_thread(generate_single_image, image_descriptions_for_segment, segment_image_paths, "google", "portrait"))
-            # for Google image gen rate limits
-            if state.image_model == "google":
-                await asyncio.sleep(rate_limit_delay*len(image_descriptions_for_segment))
+            for segment_index, image_descriptions_container in enumerate(state.image_descriptions_container_for_all_segments):
+                # image_descriptions_container has key whose value is a list of ImageDescriptions
+                image_descriptions_objs_for_segment = image_descriptions_container.get("segment_image_descriptions")
+                num_of_images_to_create = len(image_descriptions_objs_for_segment)
+                image_descriptions_for_segment = [image_description.description for image_description in image_descriptions_objs_for_segment]
+                segment_image_paths: list[Path] = [Path(os.getcwd()) / "generated_image_files" / f"{uuid.uuid4().hex}.jpg" for _ in range(num_of_images_to_create)]
+                segment_image_paths[0].parent.mkdir(parents=True, exist_ok=True)
+                image_paths_for_all_segments.append(segment_image_paths)
+
+                if state.debug_mode:
+                    print(f"[generate_segments_images] segment_index={segment_index} num_images={len(image_descriptions_for_segment)} model={state.image_model}")
+                    print(f"[generate_segments_images] segment_index={segment_index} first_out_path={segment_image_paths[0] if segment_image_paths else None}")
+                task = t.create_task(generate_image(image_descriptions=image_descriptions_for_segment,
+                                                    image_paths=segment_image_paths,
+                                                    image_model_provider="google",
+                                                    orientation="portrait",
+                                                    ))
+                # task = t.create_task(asyncio.to_thread(generate_single_image, image_descriptions_for_segment, segment_image_paths, "google", "portrait"))
+                if state.debug_mode:
+                    try:
+                        task.set_name(f"generate_image[{segment_index}]")
+                    except Exception:
+                        pass
+                tasks.append((segment_index, task, segment_image_paths))
+
+    except* Exception as eg:
+        import traceback
+        print("\n[TaskGroup ERROR] generate_segments_images failed")
+        print(f"[TaskGroup ERROR] topic={getattr(state, 'topic', None)}")
+        print(f"[TaskGroup ERROR] segments_created={len(image_paths_for_all_segments)} total_tasks={len(tasks)}")
+        for seg_i, task, paths in tasks:
+            try:
+                name = task.get_name()
+            except Exception:
+                name = None
+            print(f"[TaskGroup ERROR] task_meta segment_index={seg_i} task_name={name} num_paths={len(paths)} first_path={paths[0] if paths else None}")
+        for i, sub in enumerate(eg.exceptions, start=1):
+            print(f"\n[TaskGroup ERROR] sub-exception #{i}: {type(sub).__name__}: {sub}")
+            print("".join(traceback.format_exception(type(sub), sub, sub.__traceback__)))
+        raise
 
     return {"image_paths_for_all_segments": image_paths_for_all_segments}
+
 
 async def animate_segments_images(state: AgentState) -> dict[str, list[Path]]:
     if state.debug_mode:
         print("Generating animated clip images...")
     video_paths = []
-    motion_pattern = ["ken_burns"]
-    # motion_pattern = ["zoom_in", "zoom_out"]
+    # motion_pattern = ["ken_burns"]
+    motion_pattern = ["zoom_in", "zoom_out"]
     pattern_length = len(motion_pattern)
     pattern_start = 0
-    async with asyncio.TaskGroup() as t:
+    tasks = []
+    loop = asyncio.get_running_loop()
+    with ProcessPoolExecutor(NUM_WORKERS) as executor:
         for i in range(len(state.image_paths_for_all_segments)):
             video_path = Path(os.getcwd()) / "generated_video_files" / f"{uuid.uuid4().hex}.mp4"
             video_path.parent.mkdir(parents=True, exist_ok=True)
             video_paths.append(video_path)
             motion_start_index = pattern_start % pattern_length
-            t.create_task(asyncio.to_thread(animate_with_motion_effect,
-                                            image_paths=state.image_paths_for_all_segments[i],
-                                            video_path=video_path,
-                                            ideal_image_duration=state.ideal_image_duration,
-                                            last_image_duration=state.last_image_durations[i],
-                                            motion_pattern=motion_pattern,
-                                            motion_start_index=motion_start_index))
+            task = loop.run_in_executor(executor,
+                                    animate_with_motion_effect,
+                                    state.image_paths_for_all_segments[i],
+                                    video_path,
+                                    float(state.ideal_image_duration),
+                                    state.last_image_durations[i],
+                                    motion_pattern,
+                                    motion_start_index
+                                        )
+            tasks.append(task)
             pattern_start += len(state.image_paths_for_all_segments[i])
+        await asyncio.gather(*tasks)
     return {"video_paths": video_paths}
 
+
+# async def animate_segments_images(state: AgentState) -> dict[str, list[Path]]:
+#     if state.debug_mode:
+#         print("Generating animated clip images...")
+#     video_paths = []
+#     # motion_pattern = ["ken_burns"]
+#     motion_pattern = ["zoom_in", "zoom_out"]
+#     pattern_length = len(motion_pattern)
+#     pattern_start = 0
+#     tasks = []
+#     try:
+#         async with asyncio.TaskGroup() as t:
+#             for i in range(len(state.image_paths_for_all_segments)):
+#                 video_path = Path(os.getcwd()) / "generated_video_files" / f"{uuid.uuid4().hex}.mp4"
+#                 video_path.parent.mkdir(parents=True, exist_ok=True)
+#                 video_paths.append(video_path)
+#                 motion_start_index = pattern_start % pattern_length
+#
+#                 if state.debug_mode:
+#                     print(f"[animate_segments_images] segment_index={i} num_images={len(state.image_paths_for_all_segments[i])} out_video={video_path}")
+#                     print(f"[animate_segments_images] segment_index={i} ideal_image_duration={state.ideal_image_duration} last_image_duration={state.last_image_durations[i]}")
+#                     print(f"[animate_segments_images] segment_index={i} motion_start_index={motion_start_index} motion_pattern={motion_pattern}")
+#
+#                 task = t.create_task(asyncio.to_thread(animate_with_motion_effect,
+#                                                 image_paths=state.image_paths_for_all_segments[i],
+#                                                 video_path=video_path,
+#                                                 ideal_image_duration=state.ideal_image_duration,
+#                                                 last_image_duration=state.last_image_durations[i],
+#                                                 motion_pattern=motion_pattern,
+#                                                 motion_start_index=motion_start_index))
+#                 if state.debug_mode:
+#                     try:
+#                         task.set_name(f"animate_with_motion_effect[{i}]")
+#                     except Exception:
+#                         pass
+#                 tasks.append((i, task, video_path))
+#                 pattern_start += len(state.image_paths_for_all_segments[i])
+#     except* Exception as eg:
+#         import traceback
+#         print("\n[TaskGroup ERROR] animate_segments_images failed")
+#         print(f"[TaskGroup ERROR] topic={getattr(state, 'topic', None)}")
+#         print(f"[TaskGroup ERROR] videos_created={len(video_paths)} total_tasks={len(tasks)}")
+#         for seg_i, task, vpath in tasks:
+#             try:
+#                 name = task.get_name()
+#             except Exception:
+#                 name = None
+#             print(f"[TaskGroup ERROR] task_meta segment_index={seg_i} task_name={name} out_video={vpath}")
+#         for i, sub in enumerate(eg.exceptions, start=1):
+#             print(f"\n[TaskGroup ERROR] sub-exception #{i}: {type(sub).__name__}: {sub}")
+#             print("".join(traceback.format_exception(type(sub), sub, sub.__traceback__)))
+#         raise
+#
+#     return {"video_paths": video_paths}
+
+# async def generate_segments_images(state: AgentState) -> dict[str, list[list[Path]]]:
+#     if state.debug_mode:
+#         print("Generating clip images...")
+#
+#     rate_limit_delay = 7
+#     image_paths_for_all_segments: list[list[Path]] = []
+#     async with asyncio.TaskGroup() as t:
+#         # image_descriptions_container has key whose value is a list of ImageDescriptions
+#         for image_descriptions_container in state.image_descriptions_container_for_all_segments:
+#             # image_descriptions_container has key whose value is a list of ImageDescriptions
+#             image_descriptions_objs_for_segment = image_descriptions_container.get("segment_image_descriptions")
+#             num_of_images_to_create = len(image_descriptions_objs_for_segment)
+#             image_descriptions_for_segment = [image_description.description for image_description in image_descriptions_objs_for_segment]
+#             segment_image_paths: list[Path] = [Path(os.getcwd()) / "generated_image_files" / f"{uuid.uuid4().hex}.jpg" for _ in range(num_of_images_to_create)]
+#             segment_image_paths[0].parent.mkdir(parents=True, exist_ok=True)
+#             image_paths_for_all_segments.append(segment_image_paths)
+#             t.create_task(asyncio.to_thread(generate_single_image, image_descriptions_for_segment, segment_image_paths, "google", "portrait"))
+#             # for Google image gen rate limits
+#             if state.image_model == "google":
+#                 await asyncio.sleep(rate_limit_delay*len(image_descriptions_for_segment))
+#
+#     return {"image_paths_for_all_segments": image_paths_for_all_segments}
+#
+# async def animate_segments_images(state: AgentState) -> dict[str, list[Path]]:
+#     if state.debug_mode:
+#         print("Generating animated clip images...")
+#     video_paths = []
+#     # motion_pattern = ["ken_burns"]
+#     motion_pattern = ["zoom_in", "zoom_out"]
+#     pattern_length = len(motion_pattern)
+#     pattern_start = 0
+#     async with asyncio.TaskGroup() as t:
+#         for i in range(len(state.image_paths_for_all_segments)):
+#             video_path = Path(os.getcwd()) / "generated_video_files" / f"{uuid.uuid4().hex}.mp4"
+#             video_path.parent.mkdir(parents=True, exist_ok=True)
+#             video_paths.append(video_path)
+#             motion_start_index = pattern_start % pattern_length
+#             t.create_task(asyncio.to_thread(animate_with_motion_effect,
+#                                             image_paths=state.image_paths_for_all_segments[i],
+#                                             video_path=video_path,
+#                                             ideal_image_duration=state.ideal_image_duration,
+#                                             last_image_duration=state.last_image_durations[i],
+#                                             motion_pattern=motion_pattern,
+#                                             motion_start_index=motion_start_index))
+#             pattern_start += len(state.image_paths_for_all_segments[i])
+#     return {"video_paths": video_paths}
+#
 
 def assemble_final_video(state: AgentState) -> dict[str, Path]:
     """

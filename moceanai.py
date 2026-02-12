@@ -1,6 +1,7 @@
 import asyncio
 from pathlib import Path
 import streamlit as st
+import  json
 
 from crud import get_all_profiles, get_profile
 from short_form_content import video_creator
@@ -94,13 +95,15 @@ with st.form("video_form"):
     )
     image_model = st.selectbox(
         "Image Model",
-        options=["google", "openai"],
+        options=["google", "openai", "flux"],
         index=0,
     )
     image_style = st.selectbox(
         "Image Style",
         options=[
             "Photo Realism",
+            "Isometric Illustrations",
+            "Vector Illustrations",
             "Hyperrealism",
             "Cartoon / 2D Illustration",
             "Minimalist / Flat Illustration",
@@ -194,6 +197,14 @@ if submitted:
             loop.close()
 
     final_video_path = end_state.get("final_video_path")
+
+    #
+    # with open("animate_debug.json", "w" ) as f:
+    #     end_state["generated_audio_file_path"] = str(end_state.get("generated_audio_file_path"))
+    #     end_state["image_paths_for_all_segments"] = [list(map(str, segment_image_paths)) for segment_image_paths in end_state.get("image_paths_for_all_segments")]
+    #     end_state["video_paths"] = [str(path) for path in end_state.get("video_path")]
+    #     end_state["final_video_path"] = str(end_state.get("final_video_path"))
+    #     json.dump(end_state, f)
 
     st.markdown("---")
     st.subheader("Result")

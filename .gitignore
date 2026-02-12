@@ -15,7 +15,14 @@ beta_version/voice_over_audios/*
 .venv
 beta_version/sandbox_for_testing
 beta_version/sandbox_for_testing/*
+# files for local dev
+z_*.*
+*sandbox*.*
 
+# media files
 *.mp4
 *.mp3
 *jpg
+*.db
+*.png
+*.json
